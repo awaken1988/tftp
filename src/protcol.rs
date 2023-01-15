@@ -1,19 +1,21 @@
+use std::collections::HashMap;
 use std::ops::Range;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 use std::default::Default;
 
-pub const DEFAULT_BLOCKSIZE:  usize    = 512;
-pub const DEFAULT_WINDOWSIZE: usize    =1;
-pub const MAX_BLOCKSIZE:      usize    = 1024;
-pub const MAX_PACKET_SIZE:    usize    = MAX_BLOCKSIZE + DATA_BLOCK_NUM.end;
-pub const RECV_TIMEOUT:       Duration = Duration::from_secs(2);
-pub const OPCODE_LEN:         usize    = 2;
-pub const ACK_LEN:            usize    = 4;
+pub const DEFAULT_BLOCKSIZE:  usize        = 512;
+pub const DEFAULT_WINDOWSIZE: usize        = 1;
+pub const MAX_BLOCKSIZE:      usize        = 1024;
+pub const MAX_PACKET_SIZE:    usize        = MAX_BLOCKSIZE + DATA_BLOCK_NUM.end;
+pub const RECV_TIMEOUT:       Duration     = Duration::from_secs(2);
+pub const OPCODE_LEN:         usize        = 2;
+pub const ACK_LEN:            usize        = 4;
 pub const DATA_OFFSET:        usize        = 4;
 pub const DATA_BLOCK_NUM:     Range<usize> = 2..4;
-pub const PACKET_SIZE_MAX:    usize    = 4096;
-pub const BLKSIZE_STR:        &str     = "blksize";
-pub const WINDOW_STR:         &str     = "windowsize";
+pub const PACKET_SIZE_MAX:    usize        = 4096;
+pub const BLKSIZE_STR:        &str         = "blksize";
+pub const WINDOW_STR:         &str         = "windowsize";
 
 
 #[derive(Clone,Copy,Debug,PartialEq)]
@@ -196,7 +198,43 @@ impl<'a> PacketParser<'a> {
         }
 
         return false;
-    } 
+    }
+    
+    pub fn raw_expect(&mut self, expect_data: &[u8], consume: bool) -> bool {
+        let data = self.remaining_bytes();
+
+        if expect_data.len() < data.len() || !data.starts_with(expect_data) {
+            return false;
+        }
+        
+        if consume {
+            self.pos += expect_data.len();
+        }
+
+        return true;
+    }
+
+    pub fn separator(&mut self) -> bool {
+        return self.raw_expect(&[0], true);
+    }
+
+
+    pub fn string_with_separator(&mut self) -> Option<String> {
+        let data = self.remaining_bytes();
+        let mut consumed_bytes = 0usize;
+
+        let mut read_data = Vec::new();
+
+        for i_digit in data.iter() {
+            if i_digit == &0 {
+                self.pos += read_data.len() + 1;
+                return String::from_utf8(read_data).ok()
+            }
+            read_data.push(*i_digit);
+        }
+
+        return Option::None;
+    }
 
     // pub fn separator(&mut self) -> bool {
     //     let data = self.remaining_bytes();
@@ -251,7 +289,6 @@ impl<'a> PacketParser<'a> {
         
         return false;
     }
-
 }
 
 
@@ -345,6 +382,18 @@ impl ToString for TransferMode {
     }
 }
 
+impl FromStr for TransferMode {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self,Self::Err> {
+             if s == "netascii" { Ok(TransferMode::Netascii)}
+        else if s == "octet"    { Ok(TransferMode::Octet)}
+        else if s == "mail"     { Ok(TransferMode::Mail)}
+        else {return Err(())}
+    }
+}
+
+
 pub fn parse_opcode(raw: u16) -> Option<Opcode> {
     match raw {
         x if x == Opcode::Read  as u16 => Some(Opcode::Read),
@@ -429,9 +478,6 @@ impl<'a> PacketBuilder<'a> {
     }
     
 }
-
-
-
 
 //TODO: function not required anymore but why does it not work
 //pub fn num_to_raw<T>(number: T) -> Vec<u8>

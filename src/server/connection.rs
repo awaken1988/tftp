@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
 use std::time::Instant;
 use std::{sync::mpsc::Receiver, time::Duration};
-use std::str;
+use std::str::{self, FromStr};
 use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::path;
@@ -281,8 +282,60 @@ impl Connection {
         };
     }
 
+    fn parsed_request(&mut self, data: &[u8]) -> Result<(Opcode,String, TransferMode, HashMap<String,String>)> {
+        let mut parser = PacketParser::new(&data);
+
+        let opcode = if let Some(opcode) = parser.opcode() {
+            opcode
+        } else {
+            return Err(ErrorResponse::new_custom("invalid opcode".to_string()));
+        };
+
+        let filename = if let Some(filename) = parser.string_with_separator() {
+            filename
+        } else {
+            return Err(ErrorResponse::new_custom("invalid filename".to_string()));
+        };
+
+        //TODO: make this more pretty which chaining
+        //TODO: mode is currently ignored
+        let mode = if let Some(mode) = parser.string_with_separator() {
+            if let Ok(mode) = TransferMode::from_str(&mode) {
+                mode
+            } else {
+                return Err(ErrorResponse::new_custom("invalid mode".to_string()));
+            }
+        } else {
+            return Err(ErrorResponse::new_custom("invalid mode".to_string()));
+        };
+
+        let mut options_extension = HashMap::new();
+
+        while parser.remaining_bytes().len() > 0 {
+            let (opt_name, opt_value) = match (parser.string_with_separator(), parser.string_with_separator()) {
+                (Some(x), Some(y)) => (x, y),
+                _ => return Err(ErrorResponse::new_custom("invalid option format".to_string())),
+            };
+
+            if opt_name == BLKSIZE_STR || opt_name == WINDOW_STR {
+                options_extension.insert(opt_name, opt_value);
+            }
+            else {
+                println!("INFO: {:?} unkown option {}={} ignored", self.remote, opt_name, opt_name);
+            }
+        };
+        
+        return Ok((opcode, filename, mode, options_extension));
+    }
+
     pub fn run(&mut self)  {
         let data   = &self.recv.recv_timeout(RECV_TIMEOUT).unwrap()[..];
+
+        let parsed_options = self.parsed_request(data);
+        
+
+        let (opcode,filename,mode,extented_options) = self.request_options(data);
+
         let opcode = match parse_opcode_raw(data) {
             Some(val) => val,
             None              => return

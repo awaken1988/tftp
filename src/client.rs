@@ -43,10 +43,10 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &ClientArgu
         .separator();
 
     if args.blksize != DEFAULT_BLOCKSIZE {
-        pkg = pkg.str(&BLKSIZE_STR);
+        pkg = pkg.str(&BLKSIZE_STR).separator().str(&args.blksize.to_string());
     }
     if args.windowsize != DEFAULT_WINDOWSIZE {
-        pkg = pkg.str(&WINDOW_STR);
+        pkg = pkg.str(&WINDOW_STR).separator().str(&args.windowsize.to_string());
     }
 
     socket.send(pkg.as_bytes()).expect("ERR  : send tftp request failed");
