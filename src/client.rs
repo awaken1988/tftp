@@ -1,9 +1,56 @@
-use std::{time::{Duration}, fs::File, ffi::OsString, io::{Write, Read}, path::{Path, PathBuf}, str::FromStr, env};
+use std::{time::{Duration}, fs::File, io::{Write, Read}, path::{PathBuf}, str::FromStr, env};
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
-use crate::protcol::{Opcode,PacketBuilder, TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, PACKET_SIZE_MAX, PacketParser};
+use crate::protcol::{Opcode,PacketBuilder, TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR};
 
+struct ClientArguments {
+    remote:     String,
+    blksize:    usize,
+    windowsize: usize,
+}
+
+impl ClientArguments {
+    fn new(args: &ArgMatches) -> ClientArguments {
+        ClientArguments {
+            remote:  (args.get_one::<String>("remote").expect("invalid remote")).clone(),
+            blksize: {
+                if let Some(blksize ) = args.get_one::<String>("blksize") {
+                    usize::from_str_radix(&*blksize, 10).expect("blksize value invalid")
+                } else {
+                    DEFAULT_BLOCKSIZE
+                }
+            },
+            windowsize: {
+                if let Some(windowsize ) = args.get_one::<String>("windowsize") {
+                    usize::from_str_radix(&*windowsize, 10).expect("windowsize value invalid")
+                } else {
+                    DEFAULT_WINDOWSIZE
+                }
+            }
+        }
+    }
+}
+
+fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &ClientArguments, socket: &mut UdpSocket) {
+    let mut buf = Vec::new();
+
+    let mut pkg = PacketBuilder::new(&mut buf)
+        .opcode(opcode)
+        .str(paths.remote.clone().to_str().expect("invalid remote filepath"))
+        .separator()
+        .transfer_mode(TransferMode::Octet)
+        .separator();
+
+    if args.blksize != DEFAULT_BLOCKSIZE {
+        pkg = pkg.str(&BLKSIZE_STR);
+    }
+    if args.windowsize != DEFAULT_WINDOWSIZE {
+        pkg = pkg.str(&WINDOW_STR);
+    }
+
+    socket.send(pkg.as_bytes()).expect("ERR  : send tftp request failed");
+}
 
 pub fn client_main(args: &ArgMatches) {
     let opcode = match (args.get_many::<String>("read"), args.get_many::<String>("write")) {
@@ -12,23 +59,13 @@ pub fn client_main(args: &ArgMatches) {
         _               => panic!("invalid client action; only --read or --write possible")
     };
 
-    let paths = get_connection_paths(opcode, args);
-
-    let remote = (args.get_one::<String>("remote").expect("invalid remote")).clone();
-
-    let mut buf = Vec::new();
+    let paths             = get_connection_paths(opcode, args);
+    let client_arguments = ClientArguments::new(args);
 
     let mut socket = UdpSocket::bind("127.0.0.1:0").expect("Bind to interface failed");
-    socket.connect(remote).expect("Connection failed");
+    socket.connect(&client_arguments.remote).expect("Connection failed");
 
-    //send request
-    socket.send(PacketBuilder::new(&mut buf)
-        .opcode(opcode)
-        .str(paths.remote.clone().to_str().expect("invalid remote filepath"))
-        .separator()
-        .transfer_mode(TransferMode::Octet)
-        .separator()
-        .as_bytes()).expect("ERR  : send tftp request failed");
+    send_initial_packet(opcode, &paths, &client_arguments, &mut socket);
 
     let mut timeout = Timeout::new(RECV_TIMEOUT);
 
@@ -39,14 +76,12 @@ pub fn client_main(args: &ArgMatches) {
 
         match opcode {
             Opcode::Read => {
-                let path: OsString = args.get_one::<String>("read").unwrap().into();
                 println!("local {:?}", &paths.local);
                 let mut file = File::create(paths.local).expect("Cannot write file");
                 read_action(&mut socket, &mut file);
                 break;
             }
             Opcode::Write => {
-                let path: OsString = args.get_one::<String>("write").unwrap().into();
                 let mut file = File::open(paths.local).expect("Cannot write file");
                 write_action(&mut socket, &mut file);
                 break;

@@ -45,7 +45,7 @@ pub fn server_main(args: &ArgMatches) {
 }
 
 pub fn run_server(settings: ServerSettings) {
-    let socket = UdpSocket::bind(format!("127.0.0.1:{}", settings.port)).unwrap();
+    let socket = UdpSocket::bind(format!("0.0.0.0:{}", settings.port)).unwrap();
     let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));  //TODO: check for error
     let mut connections = HashMap::<SocketAddr,ClientState>::new();
     let mut cleanpup_stopwatch = Instant::now();

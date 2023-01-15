@@ -1,17 +1,20 @@
 use std::ops::Range;
-use std::path::Path;
 use std::time::{Duration, Instant};
 use std::default::Default;
 
-pub const DEFAULT_BLOCKSIZE: usize    = 512;
-pub const MAX_BLOCKSIZE:     usize    = 1024;
-pub const MAX_PACKET_SIZE:   usize    = MAX_BLOCKSIZE + DATA_BLOCK_NUM.end;
-pub const RECV_TIMEOUT:      Duration = Duration::from_secs(2);
-pub const OPCODE_LEN:        usize    = 2;
-pub const ACK_LEN:           usize    = 4;
-pub const DATA_OFFSET:       usize        = 4;
-pub const DATA_BLOCK_NUM:    Range<usize> = 2..4;
-pub const PACKET_SIZE_MAX:   usize    = 4096;
+pub const DEFAULT_BLOCKSIZE:  usize    = 512;
+pub const DEFAULT_WINDOWSIZE: usize    =1;
+pub const MAX_BLOCKSIZE:      usize    = 1024;
+pub const MAX_PACKET_SIZE:    usize    = MAX_BLOCKSIZE + DATA_BLOCK_NUM.end;
+pub const RECV_TIMEOUT:       Duration = Duration::from_secs(2);
+pub const OPCODE_LEN:         usize    = 2;
+pub const ACK_LEN:            usize    = 4;
+pub const DATA_OFFSET:        usize        = 4;
+pub const DATA_BLOCK_NUM:     Range<usize> = 2..4;
+pub const PACKET_SIZE_MAX:    usize    = 4096;
+pub const BLKSIZE_STR:        &str     = "blksize";
+pub const WINDOW_STR:         &str     = "windowsize";
+
 
 #[derive(Clone,Copy,Debug,PartialEq)]
 pub enum Opcode {
@@ -424,6 +427,7 @@ impl<'a> PacketBuilder<'a> {
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf
     }
+    
 }
 
 

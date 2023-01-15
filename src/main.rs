@@ -59,6 +59,14 @@ fn main()  {
                 .long("port")
                 .help("port number client connect to; default is 69")
             )
+            .arg(Arg::new("blksize")
+                .long("blksize")
+                .help("set the block size of the transfer; default is 512")
+            )
+            .arg(Arg::new("windowsize")
+                .long("windowsize")
+                .help("set the windows size of the transfer; means number of blocks for one ack; default is 1")
+            )
         )
         .get_matches();
 
