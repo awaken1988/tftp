@@ -25,6 +25,7 @@ pub enum Opcode {
     Data  = 3,
     Ack   = 4,
     Error = 5,
+    Oack  = 6,
 }
 
 #[allow(dead_code)]
@@ -476,7 +477,6 @@ impl<'a> PacketBuilder<'a> {
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf
     }
-    
 }
 
 //TODO: function not required anymore but why does it not work
