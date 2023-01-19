@@ -138,6 +138,24 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &ClientArgu
     socket.send(pkg.as_bytes())
 }
 
+fn handle_option_extension(socket: &mut SocketSendRecv, arguments: ClientArguments) -> Result<ClientArguments,String> {
+    if !socket.recv_next() {
+        return Err("server does not answer".into());
+    }
+
+    let mut pp = PacketParser::new(socket.recv_buf());
+
+    if !pp.opcode_expect(Opcode::Oack) {
+        return Ok(arguments);
+    }
+
+    //TODO: make options extension parser for server and client
+    
+
+
+    return Ok(arguments);
+}
+
 
 struct ClientFilePath {
    local:  PathBuf,
