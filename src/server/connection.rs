@@ -24,8 +24,6 @@ pub struct Connection {
     lockmap:      FileLockMap,
     locked:       Option<PathBuf>,
     buf:          Option<Vec<u8>>,
-    blksize:      u16,
-    windowsize:   u16,
 }
 
 pub struct ParsedRequest {
@@ -287,8 +285,6 @@ impl Connection {
             lockmap,
             locked:       Option::None,
             buf:          Some(Vec::new()),
-            blksize:      DEFAULT_BLOCKSIZE  as u16,
-            windowsize:   DEFAULT_WINDOWSIZE as u16,
         };
     }
 
@@ -330,13 +326,13 @@ impl Connection {
             match opt_name.as_str() {
                 BLKSIZE_STR => {
                     if let Ok(num) = u16::from_str_radix(&opt_value, 10) {
-                        self.blksize = num;
+                        self.settings.blocksize = num as usize;
                         options_extension.insert(opt_name, opt_value);
                     }
                 },
                 WINDOW_STR => {
                     if let Ok(num) = u16::from_str_radix(&opt_value, 10) {
-                        self.windowsize = num;
+                        //TODO self.settings.wi = num;
                         options_extension.insert(opt_name, opt_value);
                     }
                 },
