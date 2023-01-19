@@ -39,15 +39,16 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &ClientArgu
         .opcode(opcode)
         .str(paths.remote.clone().to_str().expect("invalid remote filepath"))
         .separator()
-        .transfer_mode(TransferMode::Octet)
-        .separator();
+        .transfer_mode(TransferMode::Octet);
 
     if args.blksize != DEFAULT_BLOCKSIZE {
-        pkg = pkg.str(&BLKSIZE_STR);
+        pkg = pkg.separator().str(&BLKSIZE_STR).separator().str(&args.blksize.to_string());
     }
     if args.windowsize != DEFAULT_WINDOWSIZE {
-        pkg = pkg.str(&WINDOW_STR);
+        pkg = pkg.separator().str(&WINDOW_STR).separator().str(&args.windowsize.to_string());
     }
+
+    pkg = pkg.separator();
 
     socket.send(pkg.as_bytes()).expect("ERR  : send tftp request failed");
 }
