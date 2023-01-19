@@ -332,7 +332,7 @@ impl Connection {
                 },
                 WINDOW_STR => {
                     if let Ok(num) = u16::from_str_radix(&opt_value, 10) {
-                        //TODO self.settings.wi = num;
+                        self.settings.windowsize = num as usize;
                         options_extension.insert(opt_name, opt_value);
                     }
                 },
