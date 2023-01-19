@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
 use std::time::Instant;
 use std::{sync::mpsc::Receiver, time::Duration};
-use std::str;
+use std::str::{self, FromStr};
 use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::path;
@@ -23,7 +24,15 @@ pub struct Connection {
     lockmap:      FileLockMap,
     locked:       Option<PathBuf>,
     buf:          Option<Vec<u8>>,
+    blksize:      u16,
+    windowsize:   u16,
+}
 
+pub struct ParsedRequest {
+    opcode:            Opcode, 
+    filename:          String , 
+    mode:              TransferMode, 
+    options_extension: HashMap<String,String>,
 }
 
 type Result<T> = std::result::Result<T,ErrorResponse>;
@@ -278,35 +287,110 @@ impl Connection {
             lockmap,
             locked:       Option::None,
             buf:          Some(Vec::new()),
+            blksize:      DEFAULT_BLOCKSIZE  as u16,
+            windowsize:   DEFAULT_WINDOWSIZE as u16,
         };
+    }
+
+    fn parsed_request(&mut self, data: &[u8]) -> Result<ParsedRequest> {
+        let mut parser = PacketParser::new(&data);
+
+        let opcode = if let Some(opcode) = parser.opcode() {
+            opcode
+        } else {
+            return Err(ErrorResponse::new_custom("invalid opcode".to_string()));
+        };
+
+        let filename = if let Some(filename) = parser.string_with_separator() {
+            filename
+        } else {
+            return Err(ErrorResponse::new_custom("invalid filename".to_string()));
+        };
+
+        //TODO: make this more pretty which chaining
+        //TODO: mode is currently ignored
+
+        let mode = if let Ok(mode) = 
+            parser.string_with_separator()
+            .map_or(Err(()), |a| TransferMode::from_str(&a).to_owned())      
+        {
+            mode
+        } else {
+            return Err(ErrorResponse::new_custom("invalid mode".to_string()));
+        };
+
+        let mut options_extension = HashMap::new();
+
+        while parser.remaining_bytes().len() > 0 {
+            let (opt_name, opt_value) = match (parser.string_with_separator(), parser.string_with_separator()) {
+                (Some(x), Some(y)) => (x, y),
+                _ => return Err(ErrorResponse::new_custom("invalid option format".to_string())),
+            };
+
+            match opt_name.as_str() {
+                BLKSIZE_STR => {
+                    if let Ok(num) = u16::from_str_radix(&opt_value, 10) {
+                        self.blksize = num;
+                        options_extension.insert(opt_name, opt_value);
+                    }
+                },
+                WINDOW_STR => {
+                    if let Ok(num) = u16::from_str_radix(&opt_value, 10) {
+                        self.windowsize = num;
+                        options_extension.insert(opt_name, opt_value);
+                    }
+                },
+                _ => println!("INFO: {:?} unkown option {}={} ignored", self.remote, opt_name, opt_name),
+            };
+        };
+        
+        return Ok(ParsedRequest {
+            opcode: opcode,
+            filename: filename,
+            mode: mode,
+            options_extension: options_extension,
+        });
+    }
+
+    fn handle_extendes_request(&mut self, extended_request: &HashMap<String,String>) {
+        if extended_request.is_empty() {
+            return;
+        }
+
+        //send OACK
+        let mut builder = PacketBuilder::new(self.buf.as_mut().unwrap()).opcode(Opcode::Oack);
+
+        for option in extended_request {
+            builder = builder.str(&option.0).separator().str(&option.1).separator();
+        }  
+
+        let buf = self.buf.take().unwrap();
+        self.send_raw_release(buf);
     }
 
     pub fn run(&mut self)  {
         let data   = &self.recv.recv_timeout(RECV_TIMEOUT).unwrap()[..];
-        let opcode = match parse_opcode_raw(data) {
-            Some(val) => val,
-            None              => return
+   
+        let request = match self.parsed_request(data) {
+            Ok(request) => request,
+            Err(err) => {
+                println!("ERR:  {:?} {}", self.remote, err.to_string());
+                self.send_error(&err);
+                return;
+            }
         };
 
-        let entries = match parse_entries(data) {
-            Some(x) => x,
-            None => return
-        };
+       
 
-        if entries.is_empty() {
-            return;
-        }
+        let opcode = request.opcode;
+        let filename = request.filename;
+        println!("INFO: {:?}; {:?} {}", self.remote, request.opcode, &filename);
 
-        let filename = match str::from_utf8(&entries[0][..]) {
-            Ok(x) => x,
-            Err(_) => return
-        };
-
-        println!("INFO: {:?}; {:?} {}", self.remote, opcode, filename);
+        self.handle_extendes_request(&request.options_extension);
 
         let result = match opcode {
-            Opcode::Read  => self.read(filename),
-            Opcode::Write => self.write(filename),
+            Opcode::Read  => self.read(&filename),
+            Opcode::Write => self.write(&filename),
             _             => return 
         };
 
@@ -316,7 +400,7 @@ impl Connection {
                 self.send_error(&err);
             },
             _ => {},
-        }
+        };
 
         //cleanup locks
         if let Some(ref locked) = self.locked.clone() {
