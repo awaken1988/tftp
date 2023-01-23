@@ -14,6 +14,7 @@ pub struct ServerSettings {
     pub write_mode:       WriteMode,
     pub root_dir:         String,
     pub blocksize:        usize,
+    pub windowsize:       usize,
     pub verbose:          bool,
     pub exit_with_client: bool,
     pub port:             u16,

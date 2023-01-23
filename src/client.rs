@@ -32,26 +32,6 @@ impl ClientArguments {
     }
 }
 
-fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &ClientArguments, socket: &mut UdpSocket) {
-    let mut buf = Vec::new();
-
-    let mut pkg = PacketBuilder::new(&mut buf)
-        .opcode(opcode)
-        .str(paths.remote.clone().to_str().expect("invalid remote filepath"))
-        .separator()
-        .transfer_mode(TransferMode::Octet)
-        .separator();
-
-    if args.blksize != DEFAULT_BLOCKSIZE {
-        pkg = pkg.str(&BLKSIZE_STR).separator().str(&args.blksize.to_string());
-    }
-    if args.windowsize != DEFAULT_WINDOWSIZE {
-        pkg = pkg.str(&WINDOW_STR).separator().str(&args.windowsize.to_string());
-    }
-
-    socket.send(pkg.as_bytes()).expect("ERR  : send tftp request failed");
-}
-
 pub fn client_main(args: &ArgMatches) {
     let opcode = match (args.get_many::<String>("read"), args.get_many::<String>("write")) {
         (Some(_), None) => Opcode::Read,
@@ -64,6 +44,8 @@ pub fn client_main(args: &ArgMatches) {
 
     let mut socket = UdpSocket::bind("127.0.0.1:0").expect("Bind to interface failed");
     socket.connect(&client_arguments.remote).expect("Connection failed");
+
+    let mut socket = SocketSendRecv::new(socket);
 
     send_initial_packet(opcode, &paths, &client_arguments, &mut socket);
 
@@ -92,6 +74,88 @@ pub fn client_main(args: &ArgMatches) {
 
 
 }
+
+
+struct SocketSendRecv {
+    socket: UdpSocket,
+    read_buf:    Vec<u8>,
+}
+
+impl SocketSendRecv {
+    fn new(socket: UdpSocket) -> SocketSendRecv {
+        SocketSendRecv {
+            socket:    socket,
+            read_buf:  Vec::new(),
+        }
+    }
+
+    fn recv_next(&mut self) -> bool {
+        self.read_buf.resize(PACKET_SIZE_MAX, 0);
+        let _           = self.socket.set_read_timeout(Some(Duration::from_secs(1))); 
+        match self.socket.recv_from(&mut self.read_buf) {
+            Ok((size, _)) =>  {
+                self.read_buf.resize(size, 0);
+                return true;
+            }
+            Err(_) => {
+                self.read_buf.resize(0, 0);
+                return false;
+            }
+        };
+    }
+
+    fn recv_buf(&self) -> &[u8] {
+        return &self.read_buf;
+    }
+
+    fn send(&mut self, data: &[u8]) {
+        self.socket.send(data).expect("ERR  : send tftp request failed");
+    }
+
+
+
+}
+
+
+fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &ClientArguments, socket: &mut SocketSendRecv) {
+    let mut buf = Vec::new();
+
+    let mut pkg = PacketBuilder::new(&mut buf)
+        .opcode(opcode)
+        .str(paths.remote.clone().to_str().expect("invalid remote filepath"))
+        .separator()
+        .transfer_mode(TransferMode::Octet);
+
+    if args.blksize != DEFAULT_BLOCKSIZE {
+        pkg = pkg.separator().str(&BLKSIZE_STR).separator().str(&args.blksize.to_string());
+    }
+    if args.windowsize != DEFAULT_WINDOWSIZE {
+        pkg = pkg.separator().str(&WINDOW_STR).separator().str(&args.windowsize.to_string());
+    }
+
+    pkg = pkg.separator();
+
+    socket.send(pkg.as_bytes())
+}
+
+fn handle_option_extension(socket: &mut SocketSendRecv, arguments: ClientArguments) -> Result<ClientArguments,String> {
+    if !socket.recv_next() {
+        return Err("server does not answer".into());
+    }
+
+    let mut pp = PacketParser::new(socket.recv_buf());
+
+    if !pp.opcode_expect(Opcode::Oack) {
+        return Ok(arguments);
+    }
+
+    //TODO: make options extension parser for server and client
+    
+
+
+    return Ok(arguments);
+}
+
 
 struct ClientFilePath {
    local:  PathBuf,
@@ -135,39 +199,29 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     }
 }
 
-fn read_action(socket: &mut UdpSocket, file: &mut File) {
+fn read_action(socket: &mut SocketSendRecv, file: &mut File) {
     let mut timeout    =  Timeout::new(RECV_TIMEOUT);
     let mut expected_block = 1u16;
     let mut buf: Vec<u8>        = Vec::new();
     let mut is_end        = false;
 
     while !is_end {
-        buf.resize(protcol::MAX_PACKET_SIZE, 0);
-
         if timeout.is_timeout() {
             println!("timeout");
             break;
         }
 
-        buf.resize(PACKET_SIZE_MAX, 0);
-        let _                       = socket.set_read_timeout(Some(Duration::from_secs(1))); 
-        let (amt, _src) = match socket.recv_from(&mut buf) {
-            Ok((size,socket)) => (size,socket),
-            Err(_) => {
-               continue;
-            }
-        };
+        if !socket.recv_next() {
+            continue;
+        }
 
-        buf.resize(amt, 0);
-
-        if !check_datablock(&buf, expected_block) {
+        if !check_datablock(socket.recv_buf(), expected_block) {
             continue;
         }
 
         //handle  data
         {
-            buf.resize(amt, 0);
-            let recv_data = &buf[DATA_OFFSET..];
+            let recv_data = &socket.recv_buf()[DATA_OFFSET..];
 
             let _ = file.write(recv_data).expect("cannot write file");
 
@@ -187,7 +241,7 @@ fn read_action(socket: &mut UdpSocket, file: &mut File) {
     }
 }
 
-fn write_action(socket: &mut UdpSocket, file: &mut File) {
+fn write_action(socket: &mut SocketSendRecv, file: &mut File) {
     let mut timeout    =  Timeout::new(RECV_TIMEOUT);
     let mut expected_ack = 0u16;
     let mut buf: Vec<u8>        = Vec::new();
@@ -203,18 +257,11 @@ fn write_action(socket: &mut UdpSocket, file: &mut File) {
 
         //check ack
         {
-            buf.resize(PACKET_SIZE_MAX, 0);
-            let _                       = socket.set_read_timeout(Some(Duration::from_secs(1))); 
-            let (amt, _src) = match socket.recv_from(&mut buf) {
-                Ok((size,socket)) => (size,socket),
-                Err(_) => {
-                   continue;
-                }
-            };
+            if !socket.recv_next() {
+                continue;
+            }
 
-            buf.resize(amt, 0);
-
-            let mut pp = PacketParser::new(&mut buf);
+            let mut pp = PacketParser::new(socket.recv_buf());
 
             match pp.opcode() {
                 Some(Opcode::Ack) => {
@@ -235,7 +282,6 @@ fn write_action(socket: &mut UdpSocket, file: &mut File) {
             timeout.reset();
         }
 
-        buf.resize(protcol::MAX_PACKET_SIZE, 0);
         PacketBuilder::new(&mut buf).opcode(Opcode::Data).number16(expected_ack);
 
         let payload_len = match file.read(&mut filebuf[0..DEFAULT_BLOCKSIZE]) {
@@ -248,6 +294,6 @@ fn write_action(socket: &mut UdpSocket, file: &mut File) {
         }
 
         buf.extend_from_slice(&filebuf[0..payload_len]);
-        socket.send(&buf).expect("cannot send data");
+        socket.send(&buf);
     }
 }

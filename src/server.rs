@@ -35,6 +35,7 @@ pub fn server_main(args: &ArgMatches) {
         write_mode:        writemode,
         root_dir:          rootdir.clone(),
         blocksize:         protcol::DEFAULT_BLOCKSIZE,
+        windowsize:        protcol::DEFAULT_WINDOWSIZE,
         verbose:           true, 
         exit_with_client:  *args.get_one::<bool>("exit-with-client").unwrap(),
         port:              port
