@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::ops::Range;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -16,6 +17,7 @@ pub const DATA_BLOCK_NUM:     Range<usize> = 2..4;
 pub const PACKET_SIZE_MAX:    usize        = 4096;
 pub const BLKSIZE_STR:        &str         = "blksize";
 pub const WINDOW_STR:         &str         = "windowsize";
+pub const EXTENDED_OPTIONS:   HashSet<&str> = [BLKSIZE_STR,WINDOW_STR].iter().cloned().collect();
 
 
 #[derive(Clone,Copy,Debug,PartialEq)]
@@ -183,6 +185,10 @@ impl<'a> PacketParser<'a> {
         &self.buf[self.pos..]
     }
 
+    pub fn has_bytes(&self) -> bool {
+        self.remaining_bytes().len() > 0
+    }
+
     pub fn opcode(&mut self) -> Option<Opcode> {
         let result = parse_opcode_raw(self.remaining_bytes());
       
@@ -237,40 +243,27 @@ impl<'a> PacketParser<'a> {
         return Option::None;
     }
 
-    // pub fn separator(&mut self) -> bool {
-    //     let data = self.remaining_bytes();
-
-    //     if data.len() == 0 || data[0] != 0 {
-    //       false
-    //     }
-    //     else {
-    //         true
-    //     } 
-    // }
-
-    // pub fn str_with_sep(&mut self) -> Option<String> {
-    //     let data = self.remaining_bytes();
-    //     let mut sepos = Option::None;
+    pub fn extended_options(&mut self) -> Result<HashMap<String,String>,()> {
+        let mut ret = HashMap::new();
+        let mut lastkey = Option::None;
+        for i in self.remaining_bytes().split(|x| x == &0) {
+            let field = if let Ok(x) = str::from_utf8(i) {x} 
+                else {return Err(())};
+            
+            if let Some(x) = lastkey {
+                ret.insert(x, field);
+                let _ = lastkey.take();
+            }  else {
+                lastkey = Some(field);
+            }
+        }    
         
-    //     for (i, d) in data.iter().enumerate() {
-    //         if *d == 0 {
-    //             sepos = Some(i)
-    //         }
-    //     }
+        if lastkey.is_some() {
+            return Err(());
+        }
 
-    //     if sepos.is_none() {
-    //         return Option::None;
-    //     }
-
-    //     let raw = &data[..sepos.unwrap()];
-    //     let txt = String::from_utf8(raw.to_vec()).ok();
-
-    //     if let Some(_) = txt {
-    //         self.pos += raw.len();
-    //     }
-
-    //     return txt;
-    // }
+        return Ok(ret)
+    }
 
     pub fn number16(&mut self) -> Option<u16> {
         let data = self.remaining_bytes();
@@ -478,6 +471,37 @@ impl<'a> PacketBuilder<'a> {
         &self.buf
     }
 }
+
+pub struct ExtendedOptions {
+    pub blksize:    Option<u16>,
+    pub windowsize: Option<u16>,
+}
+
+impl ExtendedOptions {
+    pub fn new() -> ExtendedOptions {
+        ExtendedOptions {
+            blksize: None,
+            windowsize: None,
+        }
+    }
+}
+
+pub fn filter_extended_options(options: &HashMap<String,String>) -> Result<(ExtendedOptions, HashMap<String,String>), ()> {
+    let mut known  = ExtendedOptions::new();
+    let mut unknown = HashMap::new();
+    
+    for (name,value) in options {
+        match name.as_str() {
+            BLKSIZE_STR => known.blksize    = Some(if let Ok(x) = u16::from_str_radix(&value, 10) {x} else {return Err(());}),
+            WINDOW_STR  => known.windowsize = Some(if let Ok(x) = u16::from_str_radix(&value, 10) {x} else {return Err(());}),
+            _ => unknown.insert(name.clone(), value.clone()),
+        };
+    }
+
+    return Ok(known, unknown);
+}
+
+
 
 //TODO: function not required anymore but why does it not work
 //pub fn num_to_raw<T>(number: T) -> Vec<u8>
