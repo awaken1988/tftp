@@ -317,29 +317,19 @@ impl Connection {
 
         let mut options_extension = HashMap::new();
 
-        while parser.remaining_bytes().len() > 0 {
-            let (opt_name, opt_value) = match (parser.string_with_separator(), parser.string_with_separator()) {
-                (Some(x), Some(y)) => (x, y),
-                _ => return Err(ErrorResponse::new_custom("invalid option format".to_string())),
-            };
-
-            match opt_name.as_str() {
-                BLKSIZE_STR => {
-                    if let Ok(num) = u16::from_str_radix(&opt_value, 10) {
-                        self.settings.blocksize = num as usize;
-                        options_extension.insert(opt_name, opt_value);
-                    }
-                },
-                WINDOW_STR => {
-                    if let Ok(num) = u16::from_str_radix(&opt_value, 10) {
-                        self.settings.windowsize = num as usize;
-                        options_extension.insert(opt_name, opt_value);
-                    }
-                },
-                _ => println!("INFO: {:?} unkown option {}={} ignored", self.remote, opt_name, opt_name),
-            };
-        };
-        
+        if let Ok(recv_map) = parser.extended_options() {
+            if let Ok((options,other)) = filter_extended_options(&recv_map) {
+                self.settings.blocksize  = options.blksize    as usize;
+                self.settings.windowsize = options.windowsize as usize;
+            }
+            else {
+                println!("WRN:  {:?} recv extended options but format invalid", self.remote);
+            }
+        }
+        else {
+            println!("WRN:  {:?} recv extended options but format invalid", self.remote);
+        }
+  
         return Ok(ParsedRequest {
             opcode: opcode,
             filename: filename,
@@ -349,16 +339,22 @@ impl Connection {
     }
 
     fn handle_extendes_request(&mut self, extended_request: &HashMap<String,String>) {
-        if extended_request.is_empty() {
-            return;
-        }
-
         //send OACK
         let mut builder = PacketBuilder::new(self.buf.as_mut().unwrap()).opcode(Opcode::Oack);
+        let mut is_oack = false;
 
-        for option in extended_request {
-            builder = builder.str(&option.0).separator().str(&option.1).separator();
-        }  
+        if self.settings.blocksize != DEFAULT_BLOCKSIZE {
+            builder = builder.str(BLKSIZE_STR).separator().str(&self.settings.blocksize.to_string()).separator();
+            is_oack = true;
+        }
+        if self.settings.windowsize != DEFAULT_WINDOWSIZE {
+            builder = builder.str(WINDOW_STR).separator().str(&self.settings.windowsize.to_string()).separator();
+            is_oack = true;
+        }
+
+        if !is_oack {
+            return;
+        }
 
         let buf = self.buf.take().unwrap();
         self.send_raw_release(buf);
