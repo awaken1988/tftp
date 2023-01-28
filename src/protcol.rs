@@ -17,7 +17,10 @@ pub const DATA_BLOCK_NUM:     Range<usize> = 2..4;
 pub const PACKET_SIZE_MAX:    usize        = 4096;
 pub const BLKSIZE_STR:        &str         = "blksize";
 pub const WINDOW_STR:         &str         = "windowsize";
-pub const EXTENDED_OPTIONS:   HashSet<&str> = [BLKSIZE_STR,WINDOW_STR].iter().cloned().collect();
+
+pub fn exended_options_str() -> HashSet<&'static str> {
+    return [BLKSIZE_STR,WINDOW_STR].iter().cloned().collect();
+}
 
 
 #[derive(Clone,Copy,Debug,PartialEq)]
@@ -61,8 +64,8 @@ pub struct PacketBuilder<'a> {
 }
 
 pub struct PacketParser<'a> {
-    buf:    &'a[u8],
-    pos:    usize,
+    pub buf:    &'a[u8],
+    pub pos:    usize,
 }
 
 pub struct Timeout {
@@ -191,7 +194,7 @@ impl<'a> PacketParser<'a> {
 
     pub fn opcode(&mut self) -> Option<Opcode> {
         let result = parse_opcode_raw(self.remaining_bytes());
-      
+     
         if result.is_some() {
             self.pos += OPCODE_LEN;
         }
@@ -245,24 +248,23 @@ impl<'a> PacketParser<'a> {
 
     pub fn extended_options(&mut self) -> Result<HashMap<String,String>,()> {
         let mut ret = HashMap::new();
-        let mut lastkey = Option::None;
+        let mut lastkey: Option<String> = Option::None;
+
         for i in self.remaining_bytes().split(|x| x == &0) {
-            let field = if let Ok(x) = str::from_utf8(i) {x} 
+            let field = if let Ok(x) = String::from_utf8(i.into()) {x} 
                 else {return Err(())};
             
-            if let Some(x) = lastkey {
-                ret.insert(x, field);
+            if let Some(ref x) = lastkey {
+                ret.insert(x.clone(), field);
                 let _ = lastkey.take();
             }  else {
                 lastkey = Some(field);
             }
         }    
         
-        if lastkey.is_some() {
-            return Err(());
-        }
+        //TODO: check for the last 0
 
-        return Ok(ret)
+        return Ok(ret);
     }
 
     pub fn number16(&mut self) -> Option<u16> {
@@ -395,6 +397,7 @@ pub fn parse_opcode(raw: u16) -> Option<Opcode> {
         x if x == Opcode::Data  as u16 => Some(Opcode::Data),
         x if x == Opcode::Ack   as u16 => Some(Opcode::Ack),
         x if x == Opcode::Error as u16 => Some(Opcode::Error),
+        x if x == Opcode::Oack  as u16 => Some(Opcode::Oack),
         _ => None,
     }
 }
@@ -473,15 +476,15 @@ impl<'a> PacketBuilder<'a> {
 }
 
 pub struct ExtendedOptions {
-    pub blksize:    Option<u16>,
-    pub windowsize: Option<u16>,
+    pub blksize:    u16,
+    pub windowsize: u16,
 }
 
 impl ExtendedOptions {
     pub fn new() -> ExtendedOptions {
         ExtendedOptions {
-            blksize: None,
-            windowsize: None,
+            blksize:    DEFAULT_BLOCKSIZE  as u16,
+            windowsize: DEFAULT_WINDOWSIZE as u16,
         }
     }
 }
@@ -492,13 +495,19 @@ pub fn filter_extended_options(options: &HashMap<String,String>) -> Result<(Exte
     
     for (name,value) in options {
         match name.as_str() {
-            BLKSIZE_STR => known.blksize    = Some(if let Ok(x) = u16::from_str_radix(&value, 10) {x} else {return Err(());}),
-            WINDOW_STR  => known.windowsize = Some(if let Ok(x) = u16::from_str_radix(&value, 10) {x} else {return Err(());}),
-            _ => unknown.insert(name.clone(), value.clone()),
+            BLKSIZE_STR => {
+                known.blksize    = if let Ok(x) = u16::from_str_radix(&value, 10) {x} else {return Err(());};
+            },
+            WINDOW_STR  => {
+                known.windowsize = if let Ok(x) = u16::from_str_radix(&value, 10) {x} else {return Err(());};
+            },
+            _                 => {
+                unknown.insert(name.clone(), value.clone());
+            } 
         };
     }
 
-    return Ok(known, unknown);
+    return Ok((known, unknown));
 }
 
 

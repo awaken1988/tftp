@@ -1,8 +1,8 @@
-use std::{time::{Duration}, fs::File, io::{Write, Read}, path::{PathBuf}, str::FromStr, env};
+use std::{time::{Duration}, fs::File, io::{Write, Read}, path::{PathBuf}, str::FromStr, env, option};
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
-use crate::protcol::{Opcode,PacketBuilder, TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR};
+use crate::protcol::{Opcode,PacketBuilder, TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options};
 
 struct ClientArguments {
     remote:     String,
@@ -39,15 +39,17 @@ pub fn client_main(args: &ArgMatches) {
         _               => panic!("invalid client action; only --read or --write possible")
     };
 
-    let paths             = get_connection_paths(opcode, args);
-    let client_arguments = ClientArguments::new(args);
+    let      paths             = get_connection_paths(opcode, args);
+    let mut  client_arguments = ClientArguments::new(args);
 
     let mut socket = UdpSocket::bind("127.0.0.1:0").expect("Bind to interface failed");
     socket.connect(&client_arguments.remote).expect("Connection failed");
 
     let mut socket = SocketSendRecv::new(socket);
 
-    send_initial_packet(opcode, &paths, &client_arguments, &mut socket);
+    send_initial_packet(opcode, &paths, &mut client_arguments, &mut socket);
+
+    println!("ENDINIT");
 
     let mut timeout = Timeout::new(RECV_TIMEOUT);
 
@@ -60,12 +62,12 @@ pub fn client_main(args: &ArgMatches) {
             Opcode::Read => {
                 println!("local {:?}", &paths.local);
                 let mut file = File::create(paths.local).expect("Cannot write file");
-                read_action(&mut socket, &mut file);
+                read_action(&mut socket, &mut file, &client_arguments);
                 break;
             }
             Opcode::Write => {
                 let mut file = File::open(paths.local).expect("Cannot write file");
-                write_action(&mut socket, &mut file);
+                write_action(&mut socket, &mut file, &client_arguments);
                 break;
             }
             _ => panic!("not yet implemented"),
@@ -77,8 +79,9 @@ pub fn client_main(args: &ArgMatches) {
 
 
 struct SocketSendRecv {
-    socket: UdpSocket,
-    read_buf:    Vec<u8>,
+    socket:   UdpSocket,
+    read_buf: Vec<u8>,
+    defer:    bool,
 }
 
 impl SocketSendRecv {
@@ -86,10 +89,16 @@ impl SocketSendRecv {
         SocketSendRecv {
             socket:    socket,
             read_buf:  Vec::new(),
+            defer:     false,
         }
     }
 
     fn recv_next(&mut self) -> bool {
+        if self.defer {
+            self.defer = false;
+            return true;
+        }
+
         self.read_buf.resize(PACKET_SIZE_MAX, 0);
         let _           = self.socket.set_read_timeout(Some(Duration::from_secs(1))); 
         match self.socket.recv_from(&mut self.read_buf) {
@@ -112,50 +121,72 @@ impl SocketSendRecv {
         self.socket.send(data).expect("ERR  : send tftp request failed");
     }
 
+    fn defer_recv(&mut self) {
+        self.defer = true;
+    }
+
 
 
 }
 
 
-fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &ClientArguments, socket: &mut SocketSendRecv) {
-    let mut buf = Vec::new();
+fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &mut ClientArguments, socket: &mut SocketSendRecv) {
+    //send initial packet
+    {
+        let mut buf = Vec::new();
 
-    let mut pkg = PacketBuilder::new(&mut buf)
-        .opcode(opcode)
-        .str(paths.remote.clone().to_str().expect("invalid remote filepath"))
-        .separator()
-        .transfer_mode(TransferMode::Octet);
-
-    if args.blksize != DEFAULT_BLOCKSIZE {
-        pkg = pkg.separator().str(&BLKSIZE_STR).separator().str(&args.blksize.to_string());
-    }
-    if args.windowsize != DEFAULT_WINDOWSIZE {
-        pkg = pkg.separator().str(&WINDOW_STR).separator().str(&args.windowsize.to_string());
-    }
-
-    pkg = pkg.separator();
-
-    socket.send(pkg.as_bytes())
-}
-
-fn handle_option_extension(socket: &mut SocketSendRecv, arguments: ClientArguments) -> Result<ClientArguments,String> {
-    if !socket.recv_next() {
-        return Err("server does not answer".into());
-    }
-
-    let mut pp = PacketParser::new(socket.recv_buf());
-
-    if !pp.opcode_expect(Opcode::Oack) {
-        return Ok(arguments);
-    }
-
-    //TODO: make options extension parser for server and client
+        let mut pkg = PacketBuilder::new(&mut buf)
+            .opcode(opcode)
+            .str(paths.remote.clone().to_str().expect("invalid remote filepath"))
+            .separator()
+            .transfer_mode(TransferMode::Octet);
     
+        if args.blksize != DEFAULT_BLOCKSIZE {
+            pkg = pkg.separator().str(&BLKSIZE_STR).separator().str(&args.blksize.to_string());
+        }
+        if args.windowsize != DEFAULT_WINDOWSIZE {
+            pkg = pkg.separator().str(&WINDOW_STR).separator().str(&args.windowsize.to_string());
+        }
+    
+        pkg = pkg.separator();
+    
+        socket.send(pkg.as_bytes());
+    }
 
+    //try parse extended options
+    {
+        if !socket.recv_next() {
+            return;
+        }
 
-    return Ok(arguments);
+        let mut pp = PacketParser::new(socket.recv_buf());
+
+        if !pp.opcode_expect(Opcode::Oack) {
+            socket.defer_recv();
+            return;
+        }
+
+       
+
+        if let Ok(recv_map) = pp.extended_options() {
+            for (key,value) in &recv_map {
+                println!("INFO: acknowledge {} = {}", key, value);
+            }
+ 
+            if let Ok((options,other)) = filter_extended_options(&recv_map) {
+                args.blksize    = options.blksize    as usize;
+                args.windowsize = options.windowsize as usize;
+            }
+            else {
+                println!("WRN: recv extended options but format invalid");
+            }
+        }
+        else {
+            println!("WRN: recv extended options but format invalid");
+        }
+    }
+
 }
-
 
 struct ClientFilePath {
    local:  PathBuf,
@@ -199,10 +230,9 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     }
 }
 
-fn read_action(socket: &mut SocketSendRecv, file: &mut File) {
+fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
     let mut timeout    =  Timeout::new(RECV_TIMEOUT);
     let mut expected_block = 1u16;
-    let mut buf: Vec<u8>        = Vec::new();
     let mut is_end        = false;
 
     while !is_end {
@@ -225,12 +255,13 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File) {
 
             let _ = file.write(recv_data).expect("cannot write file");
 
-            if recv_data.len() < DEFAULT_BLOCKSIZE {
+            if recv_data.len() < arguments.blksize {
                 is_end = true;
             }
         }
 
         //send ACK
+        let mut buf: Vec<u8>        = Vec::new();
         let _ = socket.send(PacketBuilder::new(&mut buf)
             .opcode(Opcode::Ack)
             .number16(expected_block).as_bytes());
@@ -241,7 +272,7 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File) {
     }
 }
 
-fn write_action(socket: &mut SocketSendRecv, file: &mut File) {
+fn write_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
     let mut timeout    =  Timeout::new(RECV_TIMEOUT);
     let mut expected_ack = 0u16;
     let mut buf: Vec<u8>        = Vec::new();
@@ -284,7 +315,7 @@ fn write_action(socket: &mut SocketSendRecv, file: &mut File) {
 
         PacketBuilder::new(&mut buf).opcode(Opcode::Data).number16(expected_ack);
 
-        let payload_len = match file.read(&mut filebuf[0..DEFAULT_BLOCKSIZE]) {
+        let payload_len = match file.read(&mut filebuf[0..arguments.blksize]) {
             Ok(len) => len,
             _          => panic!("cannot read from file"),
         };
