@@ -185,40 +185,65 @@ impl Connection {
             Ok(x) => x,
         };
 
-        let mut filebuf: Vec<u8> = vec![];
-        let mut sendbuf: Vec<u8> = vec![];
-        let mut blocknr: u16     = 1;
+        let blocksize  = self.settings.blocksize;
+        let windowsize = self.settings.windowsize;
+
+        let mut filebuf: Vec<u8>      = vec![0; PACKET_SIZE_MAX];
+        let mut sendbuf: Vec<Vec<u8>> = vec![vec![]; windowsize];
+        let mut blocknr: u16          = 1;
 
         filebuf.resize(self.settings.blocksize,0);
         
         loop {
-            let payload_len = match file.read(&mut filebuf[0..self.settings.blocksize]) {
-                Ok(len) => len,
-                _ => return Err(ErrorResponse::new_custom("cannot read file".to_string())),
-            };
+            let file_wanted_len = self.settings.blocksize * self.settings.windowsize;
             
-            //send data
-            sendbuf.resize(0, 0);
-            sendbuf.extend_from_slice(&Opcode::Data.raw());
-            sendbuf.push( (blocknr>>8) as u8 );
-            sendbuf.push( (blocknr>>0) as u8 );
-            self.bytecount += payload_len;
+            let mut curr_payload_size = 0;
+            let mut curr_frames       = 0;
 
-            if payload_len > 0 {
-                sendbuf.extend_from_slice(&filebuf[0..payload_len]);
+            for i_read in 0..windowsize {
+                let payload_len = match file.read(&mut filebuf[0..file_wanted_len]) {
+                    Ok(len) => len,
+                    _ => return Err(ErrorResponse::new_custom("cannot read file".to_string())),
+                };
+
+                if payload_len == 0 {
+                    break;
+                }
+
+                let window_blocknr = blocknr.overflowing_add(i_read as u16).0;
+
+                PacketBuilder::new(&mut sendbuf[i_read])
+                    .opcode(Opcode::Data)
+                    .number16(window_blocknr)
+                    .raw_data(&filebuf[0..payload_len]);
+                
+                    curr_payload_size += payload_len;
+                    curr_frames += 1;
             }
 
-            let _ = self.socket.send_to(&sendbuf, self.remote);
+            //send data
+            let mut is_ack = false;
+            for _ in 0..RETRY_COUNT {
+                for i_frame in &sendbuf[0..curr_frames] {
+                    let _ = self.socket.send_to(i_frame, self.remote);
+                }
 
-            //wait for ACK
-            self.wait_ack(RECV_TIMEOUT, blocknr)?;
+                if let Ok(x) = self.wait_ack(RECV_TIMEOUT, blocknr) {
+                    is_ack = true;
+                    break;
+                }
+            };
+
+            if !is_ack {
+                return Err(ErrorResponse::new_custom("max resend".to_string()));
+            }
 
             //break condition
-            if payload_len < self.settings.blocksize {
+            if curr_payload_size < file_wanted_len {
                 break;
             }
 
-            blocknr = blocknr.overflowing_add(1).0;
+            blocknr = blocknr.overflowing_add(curr_frames as u16).0;
         }       
 
         return Ok(());

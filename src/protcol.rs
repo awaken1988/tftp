@@ -12,11 +12,12 @@ pub const MAX_PACKET_SIZE:    usize            = MAX_BLOCKSIZE + DATA_BLOCK_NUM.
 pub const RECV_TIMEOUT:       Duration         = Duration::from_secs(2);
 pub const OPCODE_LEN:         usize            = 2;
 pub const ACK_LEN:            usize            = 4;
-pub const DATA_OFFSET:        usize        = 4;
-pub const DATA_BLOCK_NUM:     Range<usize> = 2..4;
-pub const PACKET_SIZE_MAX:    usize        = 4096;
-pub const BLKSIZE_STR:        &str         = "blksize";
-pub const WINDOW_STR:         &str         = "windowsize";
+pub const DATA_OFFSET:        usize            = 4;
+pub const DATA_BLOCK_NUM:     Range<usize>     = 2..4;
+pub const PACKET_SIZE_MAX:    usize            = 4096;
+pub const BLKSIZE_STR:        &str             = "blksize";
+pub const WINDOW_STR:         &str             = "windowsize";
+pub const RETRY_COUNT:        usize            = 3;
 
 pub fn exended_options_str() -> HashSet<&'static str> {
     return [BLKSIZE_STR,WINDOW_STR].iter().cloned().collect();
@@ -467,6 +468,11 @@ impl<'a> PacketBuilder<'a> {
 
     pub fn number16(self, num: u16) -> Self {
         self.buf.extend_from_slice(&num.to_be_bytes());
+        return self;
+    }
+
+    pub fn raw_data(self, data: &[u8]) -> Self {
+        self.buf.extend_from_slice(data);
         return self;
     }
 
