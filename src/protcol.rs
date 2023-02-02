@@ -97,7 +97,7 @@ impl Timeout {
     }
 }
 
-pub fn check_datablock(data: &[u8], expected: u16) -> bool {
+pub fn check_datablock(data: &[u8], start: u16, len: u16) -> bool {
     let mut parser = PacketParser::new(data);
 
     if !parser.opcode_expect(Opcode::Data) {
@@ -110,7 +110,7 @@ pub fn check_datablock(data: &[u8], expected: u16) -> bool {
         return false; 
     };
 
-    if expected == block_num {
+    if block_num >= start && block_num < (start+len) {
         return true;
     }
     

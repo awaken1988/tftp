@@ -230,24 +230,49 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     }
 }
 
+fn check_readbuffer_full(buffers: &Vec<Vec<u8>>) {
+    for i in buffers {
+        
+    }
+}
+
 fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
     let mut timeout    =  Timeout::new(RECV_TIMEOUT);
     let mut expected_block = 1u16;
     let mut is_end        = false;
 
+    let mut recvbuf: Vec<Vec<u8>> = vec![vec![]; arguments.windowsize];
+
     while !is_end {
-        if timeout.is_timeout() {
-            println!("timeout");
-            break;
+        for i_window_offset in 0..arguments.windowsize {
+            if timeout.is_timeout() {
+                println!("timeout");
+                break;
+            }
+
+            if !socket.recv_next() {
+                break;;
+            }
+
+            if !check_datablock(socket.recv_buf(), expected_block, arguments.windowsize as u16) {
+                continue;
+            }
+
+            let mut pp = PacketParser::new(socket.recv_buf());
+            let _             = pp.opcode_expect(Opcode::Data);
+            let blocknr  = pp.number16().unwrap();
+            let data   = pp.remaining_bytes();
+
+            let recvbuf_part = &mut recvbuf[((blocknr as usize) % (arguments.windowsize as usize))];
+            recvbuf_part.clear();
+            recvbuf_part.extend_from_slice(data);
         }
 
-        if !socket.recv_next() {
-            continue;
-        }
+      
 
-        if !check_datablock(socket.recv_buf(), expected_block) {
-            continue;
-        }
+     
+
+       
 
         //handle  data
         {
