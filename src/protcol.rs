@@ -456,43 +456,50 @@ pub fn filter_extended_options(options: &HashMap<String,String>) -> Result<(Exte
     return Ok((known, unknown));
 }
 
-fn ring_diff(left: u8, right: u16) -> usize {
+fn ring_diff(a: u16, b: u16) -> usize {
     return if a <= b {
-        a.abs_diff(b) as u16
+        a.abs_diff(b) as usize
     } else {
         (u8::MAX as usize + b as usize + 1) - a as usize
     };
 }
 
-struct WindowBuffer<'a>
+pub struct WindowBuffer<'a>
 {
-    windowssize: usize,
-    blksize:     usize,
-    bufs:        Vec<Vec<u8>>,
-    acked:       u16,
-    reader:      &'a mut dyn std::io::Read,
-    is_end:      bool,
+    windowssize:   usize,
+    blksize:       usize,
+    bufs:          Vec<Vec<u8>>,
+    acked:         u16,
+    reader:        &'a mut dyn std::io::Read,
+    is_reader_end: bool,
+    is_end:        bool,
 }
 
 impl<'a> WindowBuffer<'a> {
-    fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) {
+    pub fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) -> WindowBuffer {
         WindowBuffer {
             windowssize: windowssize,
             blksize: blksize,
             bufs: vec![],
             acked: 0,
             reader: reader,
+            is_reader_end: false,
             is_end: false,
-        };
+        }
     }
 
-    fn fill_level(&self) -> usize {
+    pub fn fill_level(&self) -> usize {
         return self.bufs.len();
     }
 
-    fn next(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        if self.is_end { 
-            return Ok(false); }
+    pub fn send_data(&self) -> &Vec<Vec<u8>> {
+        return &self.bufs;
+    }
+
+    pub fn next(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+        if self.is_reader_end { 
+            return Ok(self.is_end); 
+        }
 
         for i in self.fill_level()..self.windowssize {
             let mut filebuf    = vec![0u8; self.blksize];
@@ -503,13 +510,13 @@ impl<'a> WindowBuffer<'a> {
             //fill header
             PacketBuilder::new(packet_buf.as_mut())
                 .opcode(Opcode::Data)
-                .number16((self.acked+i))
+                .number16((self.acked+i as u16) as u16)
                 .raw_data(filebuf.as_ref());
 
             self.bufs.push(packet_buf);
 
             if read_len < self.blksize {
-                self.is_end = true;
+                self.is_reader_end = true;
                 break;
             }
         } 
@@ -517,17 +524,23 @@ impl<'a> WindowBuffer<'a> {
         return Ok(self.is_end);
     }
 
-    fn ack(&mut self, blknum: u16) {
+    pub fn ack(&mut self, blknum: u16) -> bool {
         let diff = ring_diff(self.acked, blknum);
+        let mut ret = false;
         if diff >= self.windowssize {
-            return;
+            return ret;
         }
 
         for i in 0..diff {
+            ret = true;
             self.bufs.remove(0);
         }
 
+        if self.is_reader_end && self.bufs.is_empty() {
+            self.is_end = true;
+        }
 
+        return ret;
     }
 
 }

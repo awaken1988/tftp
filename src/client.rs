@@ -251,7 +251,7 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientA
             }
 
             if !socket.recv_next() {
-                break;;
+                break;
             }
 
             if !check_datablock(socket.recv_buf(), expected_block, arguments.windowsize as u16) {
@@ -267,12 +267,6 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientA
             recvbuf_part.clear();
             recvbuf_part.extend_from_slice(data);
         }
-
-      
-
-     
-
-       
 
         //handle  data
         {

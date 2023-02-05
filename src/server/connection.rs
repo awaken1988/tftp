@@ -188,6 +188,51 @@ impl Connection {
         let blocksize  = self.settings.blocksize;
         let windowsize = self.settings.windowsize;
 
+        let mut window_buffer = WindowBuffer::new(&mut file, blocksize, windowsize);
+
+        let mut retries = 3;
+
+        while retries > 0 {
+            if let Ok(_) = window_buffer.next() {} else {
+                return Err(ErrorResponse::new_custom("cannot get data".to_string()));
+            }
+
+            for i_frame in window_buffer.send_data() {
+                let _ = self.socket.send_to(i_frame, self.remote);
+            }
+
+            let mut send_time: Option<Instant> = None;
+
+            loop {
+                if let Some(x) = send_time {
+                    if x.duration_since(Instant::now()) > RECV_TIMEOUT {
+                        retries-=1; break;
+                    }
+                } else { send_time = Some(Instant::now()) };
+
+                let     data      = &self.recv.recv_timeout(Duration::from_secs(4)).unwrap()[..];
+                let mut pp = PacketParser::new(&data);
+    
+                if data.len() != ACK_LEN || !pp.opcode_expect(Opcode::Ack)  {
+                    continue;
+                }
+                
+                let blknum = if let Some(x) = pp.number16() {x} else {continue};
+
+                if window_buffer.ack(blknum) { 
+                    retries = 3;
+                    break; 
+                }
+            }
+
+            if retries == 0 {
+                return Err(ErrorResponse::new_custom("ack timeout".into()));
+            }
+
+            return Ok(())
+        }
+
+
         let mut filebuf: Vec<u8>      = vec![0; PACKET_SIZE_MAX];
         let mut sendbuf: Vec<Vec<u8>> = vec![vec![]; windowsize];
         let mut blocknr: u16          = 1;
