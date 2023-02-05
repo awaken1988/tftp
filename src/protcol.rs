@@ -456,6 +456,14 @@ pub fn filter_extended_options(options: &HashMap<String,String>) -> Result<(Exte
     return Ok((known, unknown));
 }
 
+fn ring_diff(left: u8, right: u16) -> usize {
+    return if a <= b {
+        a.abs_diff(b) as u16
+    } else {
+        (u8::MAX as usize + b as usize + 1) - a as usize
+    };
+}
+
 struct WindowBuffer<'a>
 {
     windowssize: usize,
@@ -510,12 +518,14 @@ impl<'a> WindowBuffer<'a> {
     }
 
     fn ack(&mut self, blknum: u16) {
-        let blknum = blknum as usize;
+        let diff = ring_diff(self.acked, blknum);
+        if diff >= self.windowssize {
+            return;
+        }
 
-        if blknum < self.acked || blknum >= self.acked {
-            return; }
-
-        
+        for i in 0..diff {
+            self.bufs.remove(0);
+        }
 
 
     }
