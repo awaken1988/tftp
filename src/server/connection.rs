@@ -228,70 +228,8 @@ impl Connection {
             if retries == 0 {
                 return Err(ErrorResponse::new_custom("ack timeout".into()));
             }
-
-            return Ok(())
         }
-
-
-        let mut filebuf: Vec<u8>      = vec![0; PACKET_SIZE_MAX];
-        let mut sendbuf: Vec<Vec<u8>> = vec![vec![]; windowsize];
-        let mut blocknr: u16          = 1;
-
-        filebuf.resize(self.settings.blocksize,0);
-        
-        loop {
-            let file_wanted_len = self.settings.blocksize * self.settings.windowsize;
-            
-            let mut curr_payload_size = 0;
-            let mut curr_frames       = 0;
-
-            for i_read in 0..windowsize {
-                let payload_len = match file.read(&mut filebuf[0..file_wanted_len]) {
-                    Ok(len) => len,
-                    _ => return Err(ErrorResponse::new_custom("cannot read file".to_string())),
-                };
-
-                if payload_len == 0 {
-                    break;
-                }
-
-                let window_blocknr = blocknr.overflowing_add(i_read as u16).0;
-
-                PacketBuilder::new(&mut sendbuf[i_read])
-                    .opcode(Opcode::Data)
-                    .number16(window_blocknr)
-                    .raw_data(&filebuf[0..payload_len]);
-                
-                    curr_payload_size += payload_len;
-                    curr_frames += 1;
-            }
-
-            //send data
-            let mut is_ack = false;
-            for _ in 0..RETRY_COUNT {
-                for i_frame in &sendbuf[0..curr_frames] {
-                    let _ = self.socket.send_to(i_frame, self.remote);
-                }
-
-                if let Ok(x) = self.wait_ack(RECV_TIMEOUT, blocknr) {
-                    is_ack = true;
-                    break;
-                }
-            };
-
-            if !is_ack {
-                return Err(ErrorResponse::new_custom("max resend".to_string()));
-            }
-
-            //break condition
-            if curr_payload_size < file_wanted_len {
-                break;
-            }
-
-            blocknr = blocknr.overflowing_add(curr_frames as u16).0;
-        }       
-
-        return Ok(());
+        return Ok(())
     }
 
     fn write(&mut self, filename: &str) -> Result<()> {

@@ -508,10 +508,14 @@ impl<'a> WindowBuffer<'a> {
             let read_len  = self.reader.read(filebuf.as_mut())?;
 
             //fill header
+            let next_blknum = self.acked
+                .overflowing_add(i as u16).0
+                .overflowing_add(1).0;
+
             PacketBuilder::new(packet_buf.as_mut())
                 .opcode(Opcode::Data)
-                .number16((self.acked+i as u16) as u16)
-                .raw_data(filebuf.as_ref());
+                .number16((next_blknum) as u16)
+                .raw_data(&filebuf[0..(read_len as usize)]);
 
             self.bufs.push(packet_buf);
 
@@ -526,20 +530,22 @@ impl<'a> WindowBuffer<'a> {
 
     pub fn ack(&mut self, blknum: u16) -> bool {
         let diff = ring_diff(self.acked, blknum);
+
         let mut ret = false;
-        if diff >= self.windowssize {
+        if diff > self.windowssize {
             return ret;
         }
-
+        
         for i in 0..diff {
             ret = true;
             self.bufs.remove(0);
+            self.acked = self.acked.overflowing_add(1).0;
         }
 
         if self.is_reader_end && self.bufs.is_empty() {
             self.is_end = true;
         }
-
+        
         return ret;
     }
 
