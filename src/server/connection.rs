@@ -203,12 +203,12 @@ impl Connection {
 
             let mut send_time: Option<Instant> = None;
 
+            let mut timeout = OneshotTimer::new(RECV_TIMEOUT);
+
             loop {
-                if let Some(x) = send_time {
-                    if x.duration_since(Instant::now()) > RECV_TIMEOUT {
-                        retries-=1; break;
-                    }
-                } else { send_time = Some(Instant::now()) };
+                if timeout.is_timeout() {
+                    retries-=1; break;
+                }
 
                 let     data      = &self.recv.recv_timeout(Duration::from_secs(4)).unwrap()[..];
                 let mut pp = PacketParser::new(&data);

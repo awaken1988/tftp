@@ -1,3 +1,4 @@
+use core::time;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::Range;
@@ -557,7 +558,25 @@ impl<'a> WindowBuffer<'a> {
 
 
 
+//TODO: move this to another place
+pub struct OneshotTimer {
+    start:   Option<Instant>,
+    timeout: Duration,
+}
 
+impl OneshotTimer {
+    pub fn new(timeout: Duration) -> OneshotTimer {
+        OneshotTimer { start: None, timeout: timeout }
+    }
+
+    pub fn is_timeout(&mut self) -> bool {
+        if let Some(x) = self.start {
+            return x.duration_since(Instant::now()) > self.timeout;
+        } else {
+            return false;
+        }
+    }
+}
 
 
 
