@@ -1,5 +1,6 @@
 use core::time;
 use std::collections::{HashMap, HashSet};
+use std::fs::read;
 use std::hash::Hash;
 use std::ops::Range;
 use std::str::FromStr;
@@ -465,7 +466,7 @@ fn ring_diff(a: u16, b: u16) -> usize {
     };
 }
 
-pub struct WindowBuffer<'a>
+pub struct SendWindowBuffer<'a>
 {
     windowssize:   usize,
     blksize:       usize,
@@ -476,9 +477,9 @@ pub struct WindowBuffer<'a>
     is_end:        bool,
 }
 
-impl<'a> WindowBuffer<'a> {
-    pub fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) -> WindowBuffer {
-        WindowBuffer {
+impl<'a> SendWindowBuffer<'a> {
+    pub fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) -> SendWindowBuffer {
+        SendWindowBuffer {
             windowssize: windowssize,
             blksize: blksize,
             bufs: vec![],
@@ -552,7 +553,103 @@ impl<'a> WindowBuffer<'a> {
 
 }
 
+pub struct RecvWindowBuffer<'a> {
+    windowssize:   usize,
+    blksize:       usize,
+    bufs:          Vec<Option<Vec<u8>>>,
+    acked:         u16,
+    is_end:        bool,
+    is_timeout:    bool,
+    timeout:       OneshotTimer,
+    writer:        &'a mut dyn std::io::Write,
+}
 
+impl<'a> RecvWindowBuffer<'a> {
+    pub fn new(writer: &'a mut dyn std::io::Write, blksize: usize, windowssize: usize) -> Self {
+        RecvWindowBuffer {
+            windowssize: windowssize,
+            blksize: blksize,
+            bufs: vec![None; 10],
+            acked: 0,
+            is_end: false,
+            is_timeout: false,
+            timeout: OneshotTimer::new(RECV_TIMEOUT),
+            writer: writer
+        }
+    }
+
+    pub fn insert_frame(&mut self, data: &[u8]) {
+        let _ = self.timeout.is_timeout();
+
+        let mut pp = PacketParser::new(data);
+        let is_data        = pp.opcode_expect(Opcode::Data);
+        let blocknr         = pp.number16().unwrap();
+        let data          = pp.remaining_bytes();
+
+        if !is_data {return};
+
+        let diff = ring_diff(self.acked, blocknr);
+        if diff > self.windowssize { return; }
+        
+        let idx = diff.overflowing_sub(1).0;
+        self.bufs[idx] = Some(Vec::from(data));
+
+        self.timeout.explicit_start();
+    }
+
+    fn is_complete(&self) -> (usize,bool) {
+        if self.is_end { return (0, true); }
+
+        let mut ready_blocks = 0;
+        let mut is_last = false;
+
+        for i in &self.bufs {
+            if let Some(data) =  i {
+                ready_blocks+=1;
+                if data.len() < self.blksize {
+                    is_last = true;
+                    break;
+                }
+            } else {
+                return (ready_blocks, is_last);
+            }
+        }
+
+        return (ready_blocks, is_last);
+    }
+
+    pub fn sync(&mut self) -> Option<u16> {
+        let (ready_blocks, is_last) = self.is_complete();
+        let is_blocks = ready_blocks > 0;
+
+        if !is_blocks && self.timeout.is_timeout() {
+            self.is_end = true;
+            self.is_timeout = true;
+            return None;
+        }
+
+        for i in 0..ready_blocks {
+            self.writer.write(self.bufs[i].as_ref().unwrap().as_ref());
+        }
+        for i in 0..ready_blocks {
+            self.bufs.remove(0);
+            self.bufs.push(None);
+        }
+
+        self.acked = self.acked.overflowing_add(ready_blocks as u16).0;
+
+        return Some(self.acked);
+    }       
+
+    fn is_timeout(&self) -> bool {
+        return self.is_timeout;
+    }
+
+    fn is_end(&self) -> bool {
+        return self.is_end;
+    }
+
+}
 
 
 
@@ -569,10 +666,15 @@ impl OneshotTimer {
         OneshotTimer { start: None, timeout: timeout }
     }
 
+    pub fn explicit_start(&mut self) {
+        self.start = Some(Instant::now());
+    }
+
     pub fn is_timeout(&mut self) -> bool {
         if let Some(x) = self.start {
             return x.duration_since(Instant::now()) > self.timeout;
         } else {
+            self.explicit_start();
             return false;
         }
     }

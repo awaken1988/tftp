@@ -188,7 +188,7 @@ impl Connection {
         let blocksize  = self.settings.blocksize;
         let windowsize = self.settings.windowsize;
 
-        let mut window_buffer = WindowBuffer::new(&mut file, blocksize, windowsize);
+        let mut window_buffer = SendWindowBuffer::new(&mut file, blocksize, windowsize);
 
         let mut retries = 3;
 
