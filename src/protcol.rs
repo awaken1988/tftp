@@ -208,13 +208,6 @@ impl ToString for ErrorResponse {
 }
 
 impl  ErrorResponse {
-    // pub fn new(number: ErrorNumber) -> ErrorResponse {
-    //     ErrorResponse {
-    //         number: number,
-    //         msg: None
-    //     }
-    // }
-
     pub fn new_custom(msg: String) -> ErrorResponse {
         ErrorResponse {
             number: ErrorNumber::NotDefined,
@@ -615,85 +608,3 @@ impl OneshotTimer {
     }
 }
 
-
-
-
-
-
-
-
-// 
-// pub type Checker<T,R> = fn(&[u8],&T) -> Option<R>;
-
-// pub fn poll<T,R>(buf: &mut Vec<u8>, reader: &mut Reader, checker: &mut Checker<T,R>, timeout: Duration) -> Option<R> {
-//     let start = Instant::now();
-
-//     loop {
-//         let time_diff = timeout.checked_sub(start.elapsed()).unwrap_or(Duration::from_secs(0));
-
-//         if time_diff.is_zero() {
-//             break;
-//         }
-        
-//         buf.clear();
-//         if !reader(buf, time_diff) {
-//             continue;
-//         }
-
-//         if let Some(x) = checker(&buf) {
-//             return Some(x);
-//         }
-//     }
-
-//     return Option::None;
-// }
-
-// pub fn expect_block_data(data: &[u8], block_num: &u16) -> Option<()> {
-//     let mut parser = PacketParser::new(data);
-
-//     let opcode = if let Some(opcode) = parser.opcode() {
-//         match opcode {
-//             Opcode::Data => opcode,
-//             _            => return Option::None,
-//         }
-//     } else {return Option::None};
-
-//     let num = if let Some(num) = parser.number16() {
-//         num
-//     } else {return Option::None;};
-
-
-//     if num == *block_num {
-//         return Some(())
-//     }
-
-//     return Option::None;
-// }
-
-// pub fn poll_block_ack(buf: &mut Vec<u8>, reader: &mut Reader, timeout: Duration, block_number: u16) -> bool {
-//     if let Some(_) = poll::<u16,()>(buf, &mut reader, &mut expect_block_data, timeout) {
-//         return true;
-//     }
-//     else {
-//         return false;
-//     }
-// }
-
-
-
-
-//TODO: function not required anymore but why does it not work
-//pub fn num_to_raw<T>(number: T) -> Vec<u8>
-//    where 
-//        T: Copy + std::ops::Shr<usize,Output = T> + Into<u8>,
-//{
-//    let len = std::mem::size_of::<T>();
-//
-//    let mut ret: Vec<u8> = Vec::new();
-//    for i in 0..len {
-//        let val_shifted = number>>(i*8);
-//        ret.push(Into::<u8>::into(val_shifted));
-//    }
-//
-//    return ret;
-//}
