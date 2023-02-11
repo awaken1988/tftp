@@ -1,10 +1,10 @@
-use std::{time::{Duration}, fs::File, io::{Write, Read}, path::{PathBuf}, str::FromStr, env, option};
+use std::{time::{Duration}, fs::File, io::{Read}, path::{PathBuf}, str::FromStr, env};
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
 use crate::protcol::{Opcode,PacketBuilder, 
-    TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, 
-    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvWindow};
+    TransferMode, Timeout, RECV_TIMEOUT, self, DEFAULT_BLOCKSIZE, 
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window};
 
 struct ClientArguments {
     remote:     String,
@@ -44,7 +44,7 @@ pub fn client_main(args: &ArgMatches) {
     let      paths             = get_connection_paths(opcode, args);
     let mut  client_arguments = ClientArguments::new(args);
 
-    let mut socket = UdpSocket::bind("127.0.0.1:0").expect("Bind to interface failed");
+    let socket = UdpSocket::bind("127.0.0.1:0").expect("Bind to interface failed");
     socket.connect(&client_arguments.remote).expect("Connection failed");
 
     let mut socket = SocketSendRecv::new(socket);
@@ -189,6 +189,10 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &mut Client
             if let Ok((options,other)) = filter_extended_options(&recv_map) {
                 args.blksize    = options.blksize    as usize;
                 args.windowsize = options.windowsize as usize;
+
+                if !other.is_empty() {
+                    println!("WARN: Ignored extended options {:?}", other);
+                }
             }
             else {
                 println!("WRN: recv extended options but format invalid");
@@ -243,21 +247,8 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     }
 }
 
-fn check_readbuffer_full(buffers: &Vec<Vec<u8>>) {
-    for i in buffers {
-        
-    }
-}
-
 fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
-    let mut timeout    =  Timeout::new(RECV_TIMEOUT);
-    let mut expected_block = 1u16;
-    let mut is_end        = false;
-
-    let mut recvbuf: Vec<Vec<u8>> = vec![vec![]; arguments.windowsize];
-
-
-    let mut window_buffer = RecvWindow::Buffer::new(file, arguments.blksize, arguments.windowsize);
+    let mut window_buffer = recv_window::Buffer::new(file, arguments.blksize, arguments.windowsize);
 
     while !window_buffer.is_end() {
         if !socket.recv_next() {continue;}

@@ -1,7 +1,4 @@
-use core::time;
-use std::collections::{HashMap, HashSet};
-use std::fs::read;
-use std::hash::Hash;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -20,10 +17,6 @@ pub const PACKET_SIZE_MAX:    usize            = 4096;
 pub const BLKSIZE_STR:        &str             = "blksize";
 pub const WINDOW_STR:         &str             = "windowsize";
 pub const RETRY_COUNT:        usize            = 3;
-
-pub fn exended_options_str() -> HashSet<&'static str> {
-    return [BLKSIZE_STR,WINDOW_STR].iter().cloned().collect();
-}
 
 
 #[derive(Clone,Copy,Debug,PartialEq)]
@@ -99,26 +92,6 @@ impl Timeout {
     }
 }
 
-pub fn check_datablock(data: &[u8], start: u16, len: u16) -> bool {
-    let mut parser = PacketParser::new(data);
-
-    if !parser.opcode_expect(Opcode::Data) {
-        return false;
-    }
-    
-    let block_num = if let Some(block_num) = parser.number16() {
-        block_num
-    } else { 
-        return false; 
-    };
-
-    if block_num >= start && block_num < (start+len) {
-        return true;
-    }
-    
-    
-    return false;
-}
 impl<'a> PacketParser<'a> {
     pub fn new(buf: &'a[u8]) -> Self {
         PacketParser {
@@ -129,10 +102,6 @@ impl<'a> PacketParser<'a> {
 
     pub fn remaining_bytes(&self) -> &'a[u8] {
         &self.buf[self.pos..]
-    }
-
-    pub fn has_bytes(&self) -> bool {
-        self.remaining_bytes().len() > 0
     }
 
     pub fn opcode(&mut self) -> Option<Opcode> {
@@ -152,29 +121,9 @@ impl<'a> PacketParser<'a> {
 
         return false;
     }
-    
-    pub fn raw_expect(&mut self, expect_data: &[u8], consume: bool) -> bool {
-        let data = self.remaining_bytes();
-
-        if expect_data.len() < data.len() || !data.starts_with(expect_data) {
-            return false;
-        }
-        
-        if consume {
-            self.pos += expect_data.len();
-        }
-
-        return true;
-    }
-
-    pub fn separator(&mut self) -> bool {
-        return self.raw_expect(&[0], true);
-    }
-
 
     pub fn string_with_separator(&mut self) -> Option<String> {
         let data = self.remaining_bytes();
-        let mut consumed_bytes = 0usize;
 
         let mut read_data = Vec::new();
 
@@ -353,34 +302,6 @@ pub fn parse_opcode_raw(data: &[u8]) -> Option<Opcode> {
     return parse_opcode(num);
 }
 
-pub fn parse_entries(data: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let mut ret: Vec<Vec<u8>> = vec![];
-
-    if data.len() <= (OPCODE_LEN+1) {
-        return None;
-    };
-
-    let entry_data = &data[OPCODE_LEN..];
-
-    let mut next: Vec<u8> = vec![];
-    for i in entry_data {
-        if *i == 0x00 {
-            ret.push(next.clone());
-            next.resize(0, 0);
-        }
-        else {
-            next.push(*i);
-        }
-    }
-
-    if !next.is_empty() {
-        return None;
-    }
-  
-    return Some(ret);
-}
-
-
 impl<'a> PacketBuilder<'a> {
     pub fn new(buf: &'a mut Vec<u8>) -> PacketBuilder {
         buf.clear();
@@ -538,7 +459,7 @@ impl<'a> SendWindowBuffer<'a> {
             return ret;
         }
         
-        for i in 0..diff {
+        for _ in 0..diff {
             ret = true;
             self.bufs.remove(0);
             self.acked = self.acked.overflowing_add(1).0;
@@ -553,7 +474,7 @@ impl<'a> SendWindowBuffer<'a> {
 
 }
 
-pub mod RecvWindow {
+pub mod recv_window {
     pub struct Buffer<'a> {
         windowssize:   usize,
         blksize:       usize,
@@ -625,9 +546,9 @@ pub mod RecvWindow {
             }
     
             for i in 0..ready_blocks {
-                self.writer.write(self.bufs[i].as_ref().unwrap().as_ref());
+                self.writer.write(self.bufs[i].as_ref().unwrap().as_ref()).expect("write to file failed");
             }
-            for i in 0..ready_blocks {
+            for _ in 0..ready_blocks {
                 self.bufs.remove(0);
                 self.bufs.push(None);
             }

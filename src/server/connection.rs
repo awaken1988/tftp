@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
 use std::time::Instant;
@@ -29,8 +28,7 @@ pub struct Connection {
 pub struct ParsedRequest {
     opcode:            Opcode, 
     filename:          String , 
-    mode:              TransferMode, 
-    options_extension: HashMap<String,String>,
+    //TODO: mode:              TransferMode, 
 }
 
 type Result<T> = std::result::Result<T,ErrorResponse>;
@@ -68,27 +66,6 @@ impl Connection {
             .as_bytes();
 
         self.send_raw_release(buf);
-    }
-
-    fn wait_ack(&mut self, timeout: Duration, blocknr: u16) -> Result<()> {
-        let mut timeout = Timeout::new(timeout);
-
-        loop {
-            if timeout.is_timeout() {
-                break;
-            }
-
-            let     data      = &self.recv.recv_timeout(Duration::from_secs(4)).unwrap()[..];
-            let mut pp = PacketParser::new(&data);
-
-            if data.len() != ACK_LEN || !pp.opcode_expect(Opcode::Ack) || !pp.number16_expected(blocknr)  {
-                continue;
-            } else {
-                return Ok(());
-            }         
-        }
-
-        return Result::Err(ErrorResponse::new_custom("timeout wait ACK".to_string()));
     }
 
     fn wait_data(&mut self, timeout: Duration, blocknr: u16, out: &mut Vec<u8>) -> Result<()> {
@@ -190,7 +167,7 @@ impl Connection {
 
         let mut window_buffer = SendWindowBuffer::new(&mut file, blocksize, windowsize);
 
-        let mut retries = 3;
+        let mut retries = RETRY_COUNT;
 
         while retries > 0 {
             if let Ok(_) = window_buffer.next() {} else {
@@ -200,8 +177,6 @@ impl Connection {
             for i_frame in window_buffer.send_data() {
                 let _ = self.socket.send_to(i_frame, self.remote);
             }
-
-            let mut send_time: Option<Instant> = None;
 
             let mut timeout = OneshotTimer::new(RECV_TIMEOUT);
 
@@ -220,7 +195,7 @@ impl Connection {
                 let blknum = if let Some(x) = pp.number16() {x} else {continue};
 
                 if window_buffer.ack(blknum) { 
-                    retries = 3;
+                    retries = RETRY_COUNT;
                     break; 
                 }
             }
@@ -314,7 +289,7 @@ impl Connection {
         //TODO: make this more pretty which chaining
         //TODO: mode is currently ignored
 
-        let mode = if let Ok(mode) = 
+        let _mode = if let Ok(mode) = 
             parser.string_with_separator()
             .map_or(Err(()), |a| TransferMode::from_str(&a).to_owned())      
         {
@@ -323,10 +298,8 @@ impl Connection {
             return Err(ErrorResponse::new_custom("invalid mode".to_string()));
         };
 
-        let mut options_extension = HashMap::new();
-
         if let Ok(recv_map) = parser.extended_options() {
-            if let Ok((options,other)) = filter_extended_options(&recv_map) {
+            if let Ok((options,_other)) = filter_extended_options(&recv_map) {
                 self.settings.blocksize  = options.blksize    as usize;
                 self.settings.windowsize = options.windowsize as usize;
             }
@@ -341,12 +314,11 @@ impl Connection {
         return Ok(ParsedRequest {
             opcode: opcode,
             filename: filename,
-            mode: mode,
-            options_extension: options_extension,
+            //TODO: mode: mode,
         });
     }
 
-    fn handle_extendes_request(&mut self, extended_request: &HashMap<String,String>) {
+    fn handle_extendes_request(&mut self) {
         //send OACK
         let mut builder = PacketBuilder::new(self.buf.as_mut().unwrap()).opcode(Opcode::Oack);
         let mut is_oack = false;
@@ -359,6 +331,8 @@ impl Connection {
             builder = builder.str(WINDOW_STR).separator().str(&self.settings.windowsize.to_string()).separator();
             is_oack = true;
         }
+
+        let _ = builder;
 
         if !is_oack {
             return;
@@ -386,7 +360,7 @@ impl Connection {
         let filename = request.filename;
         println!("INFO: {:?}; {:?} {}", self.remote, request.opcode, &filename);
 
-        self.handle_extendes_request(&request.options_extension);
+        self.handle_extendes_request();
 
         let result = match opcode {
             Opcode::Read  => self.read(&filename),
