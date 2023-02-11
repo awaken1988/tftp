@@ -604,15 +604,20 @@ impl<'a> RecvWindowBuffer<'a> {
     pub fn sync(&mut self) -> Option<u16> {
         let (ready_blocks, is_last) = self.is_complete();
         let is_blocks = ready_blocks > 0;
+        let is_all_blocks = ready_blocks == self.windowssize;
         let is_timeout = self.timeout.is_timeout();
+
+        self.is_end = is_last;
 
         if !is_blocks && is_timeout {
             self.is_timeout = true;
             self.is_end     = true;
             return None;
         }
-
         
+        if !is_timeout && !is_all_blocks {
+            return None;
+        }
 
         for i in 0..ready_blocks {
             self.writer.write(self.bufs[i].as_ref().unwrap().as_ref());
