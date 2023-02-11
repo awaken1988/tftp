@@ -578,6 +578,10 @@ impl<'a> RecvWindowBuffer<'a> {
         }
     }
 
+    pub fn is_end(&self) -> bool {
+        return self.is_end;
+    }
+
     pub fn insert_frame(&mut self, data: &[u8]) {
         let _ = self.timeout.is_timeout();
 
@@ -596,6 +600,33 @@ impl<'a> RecvWindowBuffer<'a> {
 
         self.timeout.explicit_start();
     }
+
+    pub fn sync(&mut self) -> Option<u16> {
+        let (ready_blocks, is_last) = self.is_complete();
+        let is_blocks = ready_blocks > 0;
+        let is_timeout = self.timeout.is_timeout();
+
+        if !is_blocks && is_timeout {
+            self.is_timeout = true;
+            self.is_end     = true;
+            return None;
+        }
+
+        
+
+        for i in 0..ready_blocks {
+            self.writer.write(self.bufs[i].as_ref().unwrap().as_ref());
+        }
+        for i in 0..ready_blocks {
+            self.bufs.remove(0);
+            self.bufs.push(None);
+        }
+
+        self.acked  = self.acked.overflowing_add(ready_blocks as u16).0;
+        self.is_end = is_last;
+
+        return Some(self.acked);
+    }     
 
     fn is_complete(&self) -> (usize,bool) {
         if self.is_end { return (0, true); }
@@ -618,36 +649,11 @@ impl<'a> RecvWindowBuffer<'a> {
         return (ready_blocks, is_last);
     }
 
-    pub fn sync(&mut self) -> Option<u16> {
-        let (ready_blocks, is_last) = self.is_complete();
-        let is_blocks = ready_blocks > 0;
-
-        if !is_blocks && self.timeout.is_timeout() {
-            self.is_end = true;
-            self.is_timeout = true;
-            return None;
-        }
-
-        for i in 0..ready_blocks {
-            self.writer.write(self.bufs[i].as_ref().unwrap().as_ref());
-        }
-        for i in 0..ready_blocks {
-            self.bufs.remove(0);
-            self.bufs.push(None);
-        }
-
-        self.acked = self.acked.overflowing_add(ready_blocks as u16).0;
-
-        return Some(self.acked);
-    }       
-
     fn is_timeout(&self) -> bool {
         return self.is_timeout;
     }
 
-    fn is_end(&self) -> bool {
-        return self.is_end;
-    }
+   
 
 }
 

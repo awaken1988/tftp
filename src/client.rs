@@ -2,7 +2,7 @@ use std::{time::{Duration}, fs::File, io::{Write, Read}, path::{PathBuf}, str::F
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
-use crate::protcol::{Opcode,PacketBuilder, TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options};
+use crate::protcol::{Opcode,PacketBuilder, TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvWindowBuffer};
 
 struct ClientArguments {
     remote:     String,
@@ -82,6 +82,17 @@ struct SocketSendRecv {
     socket:   UdpSocket,
     read_buf: Vec<u8>,
     defer:    bool,
+}
+
+impl std::io::Write for SocketSendRecv {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.send(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 impl SocketSendRecv {
@@ -243,52 +254,23 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientA
 
     let mut recvbuf: Vec<Vec<u8>> = vec![vec![]; arguments.windowsize];
 
-    while !is_end {
-        for i_window_offset in 0..arguments.windowsize {
-            if timeout.is_timeout() {
-                println!("timeout");
-                break;
-            }
 
-            if !socket.recv_next() {
-                break;
-            }
+    let mut window_buffer = RecvWindowBuffer::new(file, arguments.blksize, arguments.windowsize);
 
-            if !check_datablock(socket.recv_buf(), expected_block, arguments.windowsize as u16) {
-                continue;
-            }
+    while !window_buffer.is_end() {
+        if !socket.recv_next() {continue;}
+        
+        window_buffer.insert_frame(socket.recv_buf());
 
-            let mut pp = PacketParser::new(socket.recv_buf());
-            let _             = pp.opcode_expect(Opcode::Data);
-            let blocknr  = pp.number16().unwrap();
-            let data   = pp.remaining_bytes();
-
-            let recvbuf_part = &mut recvbuf[((blocknr as usize) % (arguments.windowsize as usize))];
-            recvbuf_part.clear();
-            recvbuf_part.extend_from_slice(data);
-        }
-
-        //handle  data
-        {
-            let recv_data = &socket.recv_buf()[DATA_OFFSET..];
-
-            let _ = file.write(recv_data).expect("cannot write file");
-
-            if recv_data.len() < arguments.blksize {
-                is_end = true;
-            }
-        }
-
-        //send ACK
-        let mut buf: Vec<u8>        = Vec::new();
-        let _ = socket.send(PacketBuilder::new(&mut buf)
-            .opcode(Opcode::Ack)
-            .number16(expected_block).as_bytes());
-
-        expected_block = expected_block.overflowing_add(1).0;
-        timeout.reset();
-       
+        if let Some(ack_window) = window_buffer.sync() {
+            let mut buf: Vec<u8>        = Vec::new();
+            let _ = socket.send(PacketBuilder::new(&mut buf)
+                .opcode(Opcode::Ack)
+                .number16(ack_window).as_bytes());
+        }        
     }
+
+    //TODO: show timeout error
 }
 
 fn write_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
