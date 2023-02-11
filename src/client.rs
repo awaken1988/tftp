@@ -2,7 +2,9 @@ use std::{time::{Duration}, fs::File, io::{Write, Read}, path::{PathBuf}, str::F
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
-use crate::protcol::{Opcode,PacketBuilder, TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvWindowBuffer};
+use crate::protcol::{Opcode,PacketBuilder, 
+    TransferMode, Timeout, RECV_TIMEOUT, check_datablock, self, DATA_OFFSET, DEFAULT_BLOCKSIZE, 
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvWindow};
 
 struct ClientArguments {
     remote:     String,
@@ -255,11 +257,11 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientA
     let mut recvbuf: Vec<Vec<u8>> = vec![vec![]; arguments.windowsize];
 
 
-    let mut window_buffer = RecvWindowBuffer::new(file, arguments.blksize, arguments.windowsize);
+    let mut window_buffer = RecvWindow::Buffer::new(file, arguments.blksize, arguments.windowsize);
 
     while !window_buffer.is_end() {
         if !socket.recv_next() {continue;}
-        
+
         window_buffer.insert_frame(socket.recv_buf());
 
         if let Some(ack_window) = window_buffer.sync() {
@@ -268,6 +270,10 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientA
                 .opcode(Opcode::Ack)
                 .number16(ack_window).as_bytes());
         }        
+    }
+
+    if window_buffer.is_timeout() {
+        panic!("Tmeout");
     }
 
     //TODO: show timeout error
