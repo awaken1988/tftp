@@ -1,6 +1,4 @@
 use std::ffi::OsString;
-use std::fmt::format;
-use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
 use std::time::Instant;
@@ -67,31 +65,6 @@ impl Connection {
             .as_bytes();
 
         self.send_raw_release(buf);
-    }
-
-    fn wait_data(&mut self, timeout: Duration, blocknr: u16, out: &mut Vec<u8>) -> Result<()> {
-        let now = Instant::now();
-
-        loop {
-           if now.elapsed() > timeout {
-            break;
-           }
-
-            let     data      = &self.recv.recv_timeout(Duration::from_secs(100)).unwrap()[..];
-            let mut pp = PacketParser::new(&data);
-
-            if !pp.opcode_expect(Opcode::Data) || !pp.number16_expected(blocknr) {
-                continue;
-            }
-
-
-            let recv_data    = &data[DATA_OFFSET..];
-            out.clear();
-            out.extend_from_slice(recv_data);
-            return Ok(());
-        }
-
-        return Result::Err(ErrorResponse::new_custom("timeout wait DATA".to_string()));
     }
 
     fn get_file_path(&self, path_relative: &str) -> Result<PathBuf> {
@@ -226,25 +199,20 @@ impl Connection {
             return Err(ErrorResponse::new_custom("file is locked".to_string()));
         }
 
-        let mut file = match File::create(&full_path) {
-            Err(_)      => return Err(ErrorNumber::NotDefined.into()),
-            Ok(x) => x,
+        //TODO: use better varaint... like ok_or
+        return match File::create(&full_path) {
+            Err(_)      => Err(ErrorNumber::NotDefined.into()),
+            Ok(file) => Ok(file),
         };  
-
-        Ok(file)
     }
 
     fn upload(&mut self, filename: &str) -> Result<()> {
         println!("INFO: {:?} Write file {}", self.remote, filename);
 
         let timeout_msg = format!("upload timeout; path={}", filename).to_string();
-
         let mut file = self.open_upload_file(filename)?;
-
         let mut window_buffer = recv_window::Buffer::new(&mut file, self.settings.blocksize, self.settings.windowsize);
-        let mut recv_buf: Vec<u8> = vec![];
-
-
+        
         self.send_ack(0);
 
         while !window_buffer.is_end() {
@@ -362,8 +330,6 @@ impl Connection {
                 return;
             }
         };
-
-       
 
         let opcode = request.opcode;
         let filename = request.filename;
