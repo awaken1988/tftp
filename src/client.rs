@@ -35,7 +35,7 @@ impl ClientArguments {
 }
 
 pub fn client_main(args: &ArgMatches) {
-    let opcode = match (args.get_many::<String>("read"), args.get_many::<String>("write")) {
+    let opcode = match (args.get_many::<String>("download"), args.get_many::<String>("upload")) {
         (Some(_), None) => Opcode::Read,
         (None, Some(_)) => Opcode::Write,
         _               => panic!("invalid client action; only --read or --write possible")
@@ -64,12 +64,12 @@ pub fn client_main(args: &ArgMatches) {
             Opcode::Read => {
                 println!("local {:?}", &paths.local);
                 let mut file = File::create(paths.local).expect("Cannot write file");
-                read_action(&mut socket, &mut file, &client_arguments);
+                download_action(&mut socket, &mut file, &client_arguments);
                 break;
             }
             Opcode::Write => {
                 let mut file = File::open(paths.local).expect("Cannot write file");
-                write_action(&mut socket, &mut file, &client_arguments);
+                upload_action(&mut socket, &mut file, &client_arguments);
                 break;
             }
             _ => panic!("not yet implemented"),
@@ -212,9 +212,9 @@ struct ClientFilePath {
 
 fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     let (values, remote_idx, local_idx) = match opcode {
-        Opcode::Read  => (args.get_many::<String>("read"),  0, 1),
-        Opcode::Write => (args.get_many::<String>("write"), 1, 0),
-        _             => panic!("Invalid Operation: only Read or Write allowed"),
+        Opcode::Read  => (args.get_many::<String>("download"),  0, 1),
+        Opcode::Write => (args.get_many::<String>("upload"), 1, 0),
+        _             => panic!("Invalid Operation: only --download or --upload allowed"),
     };
     let values: Vec<&String> = values.unwrap().collect();
 
@@ -247,7 +247,7 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     }
 }
 
-fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
+fn download_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
     let mut window_buffer = recv_window::Buffer::new(file, arguments.blksize, arguments.windowsize);
 
     while !window_buffer.is_end() {
@@ -270,7 +270,7 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientA
     //TODO: show timeout error
 }
 
-fn write_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
+fn upload_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
     let mut timeout    =  Timeout::new(RECV_TIMEOUT);
     let mut expected_ack = 0u16;
     let mut buf: Vec<u8>        = Vec::new();

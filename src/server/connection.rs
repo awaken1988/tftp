@@ -148,7 +148,7 @@ impl Connection {
         }
     }
 
-    fn read(&mut self, filename: &str) -> Result<()> {
+    fn download(&mut self, filename: &str) -> Result<()> {
         println!("INFO: {:?} Read file {}", self.remote, filename);
 
         let full_path     = self.get_file_path(filename)?;
@@ -207,7 +207,7 @@ impl Connection {
         return Ok(())
     }
 
-    fn write(&mut self, filename: &str) -> Result<()> {
+    fn upload(&mut self, filename: &str) -> Result<()> {
         println!("INFO: {:?} Write file {}", self.remote, filename);
 
         if self.settings.write_mode == WriteMode::Disabled {
@@ -363,8 +363,8 @@ impl Connection {
         self.handle_extendes_request();
 
         let result = match opcode {
-            Opcode::Read  => self.read(&filename),
-            Opcode::Write => self.write(&filename),
+            Opcode::Read  => self.download(&filename),
+            Opcode::Write => self.upload(&filename),
             _             => return 
         };
 
