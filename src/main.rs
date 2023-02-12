@@ -3,6 +3,7 @@ use clap::{Command, Arg, builder::PossibleValue, ArgAction};
 mod server;
 mod client;
 mod protcol;
+mod tlog;
 
 fn main()  {
     let args = Command::new("tftpserver")

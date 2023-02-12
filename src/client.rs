@@ -2,9 +2,9 @@ use std::{time::{Duration}, fs::File, io::{Read}, path::{PathBuf}, str::FromStr,
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
-use crate::protcol::{Opcode,PacketBuilder, 
+use crate::{protcol::{Opcode,PacketBuilder, 
     TransferMode, Timeout, RECV_TIMEOUT, self, DEFAULT_BLOCKSIZE, 
-    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window};
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window}, tlog};
 
 struct ClientArguments {
     remote:     String,
@@ -60,7 +60,6 @@ pub fn client_main(args: &ArgMatches) {
 
         match opcode {
             Opcode::Read => {
-                println!("local {:?}", &paths.local);
                 let mut file = File::create(paths.local).expect("Cannot write file");
                 download_action(&mut socket, &mut file, &client_arguments);
                 break;
@@ -181,7 +180,7 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &mut Client
 
         if let Ok(recv_map) = pp.extended_options() {
             for (key,value) in &recv_map {
-                println!("INFO: acknowledge {} = {}", key, value);
+                tlog::info!("acknowledge {} = {}", key, value);
             }
  
             if let Ok((options,other)) = filter_extended_options(&recv_map) {
@@ -189,15 +188,15 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &mut Client
                 args.windowsize = options.windowsize as usize;
 
                 if !other.is_empty() {
-                    println!("WARN: Ignored extended options {:?}", other);
+                    tlog::warning!("Ignored extended options {:?}", other);
                 }
             }
             else {
-                println!("WRN: recv extended options but format invalid");
+                tlog::warning!("recv extended options but format invalid");
             }
         }
         else {
-            println!("WRN: recv extended options but format invalid");
+            tlog::warning!("recv extended options but format invalid");
         }
     }
 

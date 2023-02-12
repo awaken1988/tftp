@@ -10,7 +10,8 @@ use std::path;
 
 
 use crate::server::defs::{ServerSettings,WriteMode,FileLockMap, FileLockMode};
-use crate::protcol::*;
+
+use crate::{protcol::*, tlog};
 
 pub struct Connection {
     recv:         Receiver<Vec<u8>>,
@@ -118,12 +119,14 @@ impl Connection {
             }
         }
         else {
-            println!("WARN: {:?} double unlock file = {:?}", self.remote, path);
+            tlog::warning!("WARN: {:?} double unlock file = {:?}", self.remote, path);
+
+            tlog::warning!("blablub {:?}", self.remote);
         }
     }
 
     fn download(&mut self, filename: &str) -> Result<()> {
-        println!("INFO: {:?} Read file {}", self.remote, filename);
+        tlog::info!("{:?} Read file {}", self.remote, filename);
 
         let full_path     = self.get_file_path(filename)?;
 
@@ -207,7 +210,7 @@ impl Connection {
     }
 
     fn upload(&mut self, filename: &str) -> Result<()> {
-        println!("INFO: {:?} Write file {}", self.remote, filename);
+        tlog::info!("{:?} Write file {}", self.remote, filename);
 
         let timeout_msg = format!("upload timeout; path={}", filename).to_string();
         let mut file = self.open_upload_file(filename)?;
@@ -281,11 +284,11 @@ impl Connection {
                 self.settings.windowsize = options.windowsize as usize;
             }
             else {
-                println!("WRN:  {:?} recv extended options but format invalid", self.remote);
+                tlog::warning!("{:?} recv extended options but format invalid", self.remote);
             }
         }
         else {
-            println!("WRN:  {:?} recv extended options but format invalid", self.remote);
+            tlog::warning!("{:?} recv extended options but format invalid", self.remote);
         }
   
         return Ok(ParsedRequest {
@@ -325,7 +328,7 @@ impl Connection {
         let request = match self.parsed_request(data) {
             Ok(request) => request,
             Err(err) => {
-                println!("ERR:  {:?} {}", self.remote, err.to_string());
+                tlog::error!("{:?} {}", self.remote, err.to_string());
                 self.send_error(&err);
                 return;
             }
@@ -333,7 +336,7 @@ impl Connection {
 
         let opcode = request.opcode;
         let filename = request.filename;
-        println!("INFO: {:?}; {:?} {}", self.remote, request.opcode, &filename);
+        tlog::info!("{:?}; {:?} {}", self.remote, request.opcode, &filename);
 
         self.handle_extendes_request();
 
@@ -345,7 +348,7 @@ impl Connection {
 
         match result {
             Err(err) => {
-                println!("ERR:  {:?} {}", self.remote, err.to_string());
+                tlog::error!("{:?} {}", self.remote, err.to_string());
                 self.send_error(&err);
             },
             _ => {},
@@ -359,7 +362,7 @@ impl Connection {
         //statistics
         let runtime = self.start.elapsed().as_secs_f32();
         let mib_s      = ((self.bytecount as f32) / runtime) / 1000000.0;
-        println!("INFO: {:?} {:?} runtime = {}s; speed = {}MiB/s", self.remote, opcode, runtime, mib_s );
+        tlog::info!("{:?} {:?} runtime = {}s; speed = {}MiB/s", self.remote, opcode, runtime, mib_s );
 
     }    
 }
