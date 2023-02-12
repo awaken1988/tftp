@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::fmt::format;
 use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
@@ -207,9 +208,7 @@ impl Connection {
         return Ok(())
     }
 
-    fn upload(&mut self, filename: &str) -> Result<()> {
-        println!("INFO: {:?} Write file {}", self.remote, filename);
-
+    fn open_upload_file(&mut self, filename: &str) -> Result<File> {
         if self.settings.write_mode == WriteMode::Disabled {
             return Err(ErrorNumber::AccessViolation.into());
         }
@@ -232,26 +231,36 @@ impl Connection {
             Ok(x) => x,
         };  
 
-        let mut block_num = 0u16;
-        let mut data: Vec<u8> = vec![];
-        self.send_ack(block_num);
-        loop {
-            block_num = block_num.wrapping_add(1);
+        Ok(file)
+    }
+
+    fn upload(&mut self, filename: &str) -> Result<()> {
+        println!("INFO: {:?} Write file {}", self.remote, filename);
+
+        let timeout_msg = format!("upload timeout; path={}", filename).to_string();
+
+        let mut file = self.open_upload_file(filename)?;
+
+        let mut window_buffer = recv_window::Buffer::new(&mut file, self.settings.blocksize, self.settings.windowsize);
+        let mut recv_buf: Vec<u8> = vec![];
+
+
+        self.send_ack(0);
+
+        while !window_buffer.is_end() {
+            let recv = if let Ok(recv) = self.recv.recv_timeout(RECV_TIMEOUT) {
+                recv
+            } else { return Err(ErrorResponse::new_custom(timeout_msg.clone())) };
+
+            window_buffer.insert_frame(&recv);
             
-            self.wait_data(RECV_TIMEOUT, block_num, &mut data)?;
-
-            self.bytecount += data.len();
-
-            match file.write(&data) {
-                Err(_) => return Err(ErrorResponse::new_custom("write to file error".to_string())),
-                Ok(_) => {},
+            if let Some(ack) = window_buffer.sync() {
+                self.send_ack(ack);
             }
-            
-            self.send_ack(block_num);
+        }
 
-            if data.len() < self.settings.blocksize {
-                break;
-            }
+        if window_buffer.is_timeout() {
+            return Err(ErrorResponse::new_custom(timeout_msg.clone()));
         }
 
         return Ok(());

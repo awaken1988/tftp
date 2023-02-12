@@ -51,8 +51,6 @@ pub fn client_main(args: &ArgMatches) {
 
     send_initial_packet(opcode, &paths, &mut client_arguments, &mut socket);
 
-    println!("ENDINIT");
-
     let mut timeout = Timeout::new(RECV_TIMEOUT);
 
     loop {

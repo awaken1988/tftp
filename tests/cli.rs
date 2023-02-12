@@ -95,11 +95,11 @@ fn tftp_transfer(data: &[u8], is_read: bool, port: u16) -> Result<(), Box<dyn st
             cmd.arg("--remote").arg(format!("127.0.0.1:{}",port));
 
             if is_read {
-                cmd.arg("--read");
+                cmd.arg("--download");
                 cmd.arg("download.bin");
                 cmd.arg(&*client_file_path.to_string_lossy());
             } else {
-                cmd.arg("--write");
+                cmd.arg("--upload");
                 cmd.arg(&*client_file_path.to_string_lossy());
                 cmd.arg("download.bin");  
             }
