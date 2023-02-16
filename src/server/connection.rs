@@ -159,7 +159,6 @@ impl Connection {
             if let Ok(data) =  self.recv.recv_timeout(Duration::from_secs(4)) {
                 window_buffer.ack_packet(&data);
             }        
-           
         }
 
         return Ok(())

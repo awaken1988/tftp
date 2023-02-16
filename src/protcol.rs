@@ -380,6 +380,7 @@ fn ring_diff(a: u16, b: u16) -> usize {
     };
 }
 
+#[derive(Debug)]
 pub enum SendAction<'a> {
     SendBuffer(&'a Vec<Vec<u8>>),
     NoOp,
@@ -426,6 +427,8 @@ impl<'a> SendStateMachine<'a> {
     }
 
     pub fn next(&mut self) -> SendAction {
+        println!("{:?} {:?} {:?} {:?}", self.is_reader_end, self.is_end, self.acked, self.new_acked);
+
         if self.is_end {
             return SendAction::End;
         }

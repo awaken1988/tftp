@@ -4,7 +4,7 @@ use clap::ArgMatches;
 use std::net::UdpSocket;
 use crate::{protcol::{Opcode,PacketBuilder, 
     TransferMode, Timeout, RECV_TIMEOUT, self, DEFAULT_BLOCKSIZE, 
-    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window}, tlog};
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window, SendStateMachine, SendAction}, tlog};
 
 struct ClientArguments {
     remote:     String,
@@ -261,65 +261,28 @@ fn download_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &Cli
     }
 
     if window_buffer.is_timeout() {
-        panic!("Tmeout");
+        tlog::error!("timeout");
     }
-
-    //TODO: show timeout error
 }
 
 fn upload_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
-    let mut timeout    =  Timeout::new(RECV_TIMEOUT);
-    let mut expected_ack = 0u16;
-    let mut buf: Vec<u8>        = Vec::new();
-    let mut filebuf: Vec<u8>    = Vec::new();
-    let mut is_last       = false;
-
-    filebuf.resize(protcol::MAX_BLOCKSIZE, 0);
-
-    while !is_last {
-        if timeout.is_timeout() {
-            panic!("timeout");
+    let mut window_buffer = SendStateMachine::new(file, arguments.blksize, arguments.windowsize);
+    
+    while let action = window_buffer.next() {
+        match action {
+            SendAction::SendBuffer(bufs) => {
+                for i_frame in window_buffer.send_data() {
+                    socket.send(&i_frame)
+                }
+            },
+            SendAction::Timeout => { 
+                tlog::error!("timeout");
+                return;}
+            SendAction::End => break,
+            _ => {}
         }
 
-        //check ack
-        {
-            if !socket.recv_next() {
-                continue;
-            }
-
-            let mut pp = PacketParser::new(socket.recv_buf());
-
-            match pp.opcode() {
-                Some(Opcode::Ack) => {
-                    if !pp.number16_expected(expected_ack) {
-                        continue;
-                    }
-
-                },
-                Some(Opcode::Error) => {
-                    panic!("tftp error recv");
-                },
-                _ => {
-                    continue;
-                },
-            }
-
-            expected_ack = expected_ack.overflowing_add(1).0;
-            timeout.reset();
-        }
-
-        PacketBuilder::new(&mut buf).opcode(Opcode::Data).number16(expected_ack);
-
-        let payload_len = match file.read(&mut filebuf[0..arguments.blksize]) {
-            Ok(len) => len,
-            _          => panic!("cannot read from file"),
-        };
-
-        if payload_len != DEFAULT_BLOCKSIZE  {
-            is_last = true;
-        }
-
-        buf.extend_from_slice(&filebuf[0..payload_len]);
-        socket.send(&buf);
+        if !socket.recv_next() { continue; }
+        window_buffer.ack_packet(socket.recv_buf());
     }
 }
