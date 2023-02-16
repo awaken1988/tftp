@@ -27,7 +27,7 @@ pub fn out(log_type: LogType, msg: &str) {
     let full_msg = format!("{:<10}: {} ", log_type, msg);
 
     match log_type {
-        Error => {
+        LogType::Error => {
             eprintln!("{}", full_msg);
         },
         _     => {

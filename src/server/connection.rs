@@ -1,8 +1,8 @@
 use std::ffi::OsString;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
-use std::time::Instant;
-use std::{sync::mpsc::Receiver, time::Duration};
+use std::time::{Instant, Duration};
+use std::{sync::mpsc::Receiver};
 use std::str::{self, FromStr};
 use std::path::{Path, PathBuf};
 use std::fs::File;
@@ -142,45 +142,26 @@ impl Connection {
         let blocksize  = self.settings.blocksize;
         let windowsize = self.settings.windowsize;
 
-        let mut window_buffer = SendWindowBuffer::new(&mut file, blocksize, windowsize);
+        let mut window_buffer = SendStateMachine::new(&mut file, blocksize, windowsize);
 
-        let mut retries = RETRY_COUNT;
-
-        while retries > 0 {
-            if let Ok(_) = window_buffer.next() {} else {
-                return Err(ErrorResponse::new_custom("cannot get data".to_string()));
+        while let action = window_buffer.next() {
+            match action {
+                SendAction::SendBuffer(bufs) => {
+                    for i_frame in window_buffer.send_data() {
+                        let _ = self.socket.send_to(i_frame, self.remote);
+                    }
+                },
+                SendAction::Timeout => { return Err(ErrorResponse::new_custom("ack timeout".into()));  }
+                SendAction::End => break,
+                _ => {}
             }
 
-            for i_frame in window_buffer.send_data() {
-                let _ = self.socket.send_to(i_frame, self.remote);
-            }
-
-            let mut timeout = OneshotTimer::new(RECV_TIMEOUT);
-
-            loop {
-                if timeout.is_timeout() {
-                    retries-=1; break;
-                }
-
-                let     data      = &self.recv.recv_timeout(Duration::from_secs(4)).unwrap()[..];
-                let mut pp = PacketParser::new(&data);
-    
-                if data.len() != ACK_LEN || !pp.opcode_expect(Opcode::Ack)  {
-                    continue;
-                }
-                
-                let blknum = if let Some(x) = pp.number16() {x} else {continue};
-
-                if window_buffer.ack(blknum) { 
-                    retries = RETRY_COUNT;
-                    break; 
-                }
-            }
-
-            if retries == 0 {
-                return Err(ErrorResponse::new_custom("ack timeout".into()));
-            }
+            if let Ok(data) =  self.recv.recv_timeout(Duration::from_secs(4)) {
+                window_buffer.ack_packet(&data);
+            }        
+           
         }
+
         return Ok(())
     }
 

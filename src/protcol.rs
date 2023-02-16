@@ -16,7 +16,7 @@ pub const DATA_BLOCK_NUM:     Range<usize>     = 2..4;
 pub const PACKET_SIZE_MAX:    usize            = 4096;
 pub const BLKSIZE_STR:        &str             = "blksize";
 pub const WINDOW_STR:         &str             = "windowsize";
-pub const RETRY_COUNT:        usize            = 3;
+pub const RETRY_COUNT:        usize            = 3;                 //rename to MAX_RETRIES
 
 
 #[derive(Clone,Copy,Debug,PartialEq)]
@@ -380,27 +380,40 @@ fn ring_diff(a: u16, b: u16) -> usize {
     };
 }
 
-pub struct SendWindowBuffer<'a>
+pub enum SendAction<'a> {
+    SendBuffer(&'a Vec<Vec<u8>>),
+    NoOp,
+    Timeout,
+    End,
+}
+
+pub struct SendStateMachine<'a>
 {
     windowssize:   usize,
     blksize:       usize,
     bufs:          Vec<Vec<u8>>,
     acked:         u16,
+    new_acked:     bool,
     reader:        &'a mut dyn std::io::Read,
     is_reader_end: bool,
     is_end:        bool,
+    timeout:       OneshotTimer,
+    retry:         usize,
 }
 
-impl<'a> SendWindowBuffer<'a> {
-    pub fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) -> SendWindowBuffer {
-        SendWindowBuffer {
+impl<'a> SendStateMachine<'a> {
+    pub fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) -> SendStateMachine {
+        SendStateMachine {
             windowssize: windowssize,
             blksize: blksize,
             bufs: vec![],
             acked: 0,
+            new_acked: true,
             reader: reader,
             is_reader_end: false,
             is_end: false,
+            timeout: OneshotTimer::new(RECV_TIMEOUT),
+            retry: RETRY_COUNT,
         }
     }
 
@@ -412,16 +425,40 @@ impl<'a> SendWindowBuffer<'a> {
         return &self.bufs;
     }
 
-    pub fn next(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        if self.is_reader_end { 
-            return Ok(self.is_end); 
+    pub fn next(&mut self) -> SendAction {
+        if self.is_end {
+            return SendAction::End;
         }
 
+        if !self.is_reader_end {
+            self.impl_next();
+        };
+
+        if self.new_acked {
+            self.new_acked  = false;
+            return SendAction::SendBuffer(&self.bufs);
+        }
+        
+        if self.timeout.is_timeout() {
+            if self.retry == 0 {
+                return SendAction::Timeout;
+            }
+            else {
+                self.retry -= 1;
+                return SendAction::SendBuffer(&self.bufs);
+            }
+        };
+
+        return SendAction::NoOp;
+
+    }
+
+    fn impl_next(&mut self) {  
         for i in self.fill_level()..self.windowssize {
             let mut filebuf    = vec![0u8; self.blksize];
             let mut packet_buf = vec![0u8; MAX_BLOCKSIZE];
 
-            let read_len  = self.reader.read(filebuf.as_mut())?;
+            let read_len  =  self.reader.read(filebuf.as_mut()).unwrap();   //TODO: make proper error handling
 
             //fill header
             let next_blknum = self.acked
@@ -440,20 +477,29 @@ impl<'a> SendWindowBuffer<'a> {
                 break;
             }
         } 
-
-        return Ok(self.is_end);
     }
 
-    pub fn ack(&mut self, blknum: u16) -> bool {
+    pub fn ack_packet(&mut self, frame: &[u8]) {
+        let mut pp = PacketParser::new(frame);
+
+        if frame.len() != ACK_LEN || !pp.opcode_expect(Opcode::Ack)  {
+           return;
+        }
+
+        if let Some(num) = pp.number16() {
+            self.ack(num);
+        } 
+    }
+
+    pub fn ack(&mut self, blknum: u16) {
         let diff = ring_diff(self.acked, blknum);
 
-        let mut ret = false;
         if diff > self.windowssize {
-            return ret;
+            return;
         }
         
         for _ in 0..diff {
-            ret = true;
+            self.new_acked = true;
             self.bufs.remove(0);
             self.acked = self.acked.overflowing_add(1).0;
         }
@@ -461,8 +507,12 @@ impl<'a> SendWindowBuffer<'a> {
         if self.is_reader_end && self.bufs.is_empty() {
             self.is_end = true;
         }
+
+        if self.new_acked {
+            self.timeout = OneshotTimer::new(RECV_TIMEOUT);
+            self.retry = RETRY_COUNT;
+        }
         
-        return ret;
     }
 
 }
