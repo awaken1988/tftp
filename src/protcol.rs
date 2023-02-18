@@ -427,7 +427,7 @@ impl<'a> SendStateMachine<'a> {
     }
 
     pub fn next(&mut self) -> SendAction {
-        println!("{:?} {:?} {:?} {:?}", self.is_reader_end, self.is_end, self.acked, self.new_acked);
+        //DELETE: println!("{:?} {:?} {:?} {:?}", self.is_reader_end, self.is_end, self.acked, self.new_acked);
 
         if self.is_end {
             return SendAction::End;
@@ -576,7 +576,7 @@ pub mod recv_window {
         pub fn sync(&mut self) -> Option<u16> {
             let (ready_blocks, is_last) = self.is_complete();
             let is_blocks = ready_blocks > 0;
-            let is_all_blocks = ready_blocks == self.windowssize;
+            let is_all_blocks = ready_blocks == self.windowssize || is_blocks && is_last;
             let is_timeout = self.timeout.is_timeout();
     
             self.is_end = is_last;

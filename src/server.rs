@@ -118,7 +118,7 @@ fn cleanup_connections(connections: &mut HashMap::<SocketAddr,ClientState>, stop
     for i_con in todo_delete.iter() {
         let state = connections.remove(&i_con).unwrap();
 
-        tlog::info!("INFO: {:?} quit", i_con);
+        tlog::info!("{:?} quit", i_con);
         let _ = state.join_handle.unwrap().join();
     }
 
