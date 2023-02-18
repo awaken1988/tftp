@@ -1,7 +1,10 @@
 TFTP server and client
 
 # Overview
-This is an implementation of an TFTP client and server. 
+This is an implementation of an TFTP client and server.
+
+# State
+Currently under development
 
 # Example
 
@@ -15,16 +18,13 @@ Download a file from server
 tftp client --remote 127.0.0.1:69 --read forest01.jpg --blksize 2048 --windowsize 10
 ```
 
-# State
-Currently under development
-
 # Features
 * Bascic Send/Recv with 512 Blksize
-* Extended Options (Ourrently only Download)
+* Extended Options
     * Blocksize
     * Windowsize
     
  # Planned
- * Implement Extended Options for Upload
+ * Fix behaviour on packet loss (e.g ACK loss)
  * Implement Generators (Download from e.g e number generator)
  * Add UnitTest which tests timeout and missing packets 
