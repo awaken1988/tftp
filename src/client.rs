@@ -250,6 +250,11 @@ fn download_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &Cli
     while !window_buffer.is_end() {
         if !socket.recv_next() {continue;}
 
+        if let Some(packet_error) = PacketParser::new(socket.recv_buf()).parse_error() {
+            tlog::error!("{}", packet_error.to_string());
+            return;
+        }
+
         window_buffer.insert_frame(socket.recv_buf());
 
         if let Some(ack_window) = window_buffer.sync() {
@@ -283,6 +288,14 @@ fn upload_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &Clien
         }
 
         if !socket.recv_next() { continue; }
-        window_buffer.ack_packet(socket.recv_buf());
+
+        let recv_packet = socket.recv_buf();
+
+        if let Some(packet_error) = PacketParser::new(recv_packet).parse_error() {
+            tlog::error!("{}", packet_error.to_string());
+            return;
+        }
+
+        window_buffer.ack_packet(recv_packet);
     }
 }

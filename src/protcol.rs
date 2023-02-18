@@ -4,6 +4,9 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 use std::default::Default;
 
+use num_traits::FromPrimitive;
+
+
 pub const DEFAULT_BLOCKSIZE:  usize            = 512;
 pub const DEFAULT_WINDOWSIZE: usize            = 1;
 pub const MAX_BLOCKSIZE:      usize            = 1024;
@@ -19,7 +22,7 @@ pub const WINDOW_STR:         &str             = "windowsize";
 pub const RETRY_COUNT:        usize            = 3;                 //rename to MAX_RETRIES
 
 
-#[derive(Clone,Copy,Debug,PartialEq)]
+#[derive(Clone,Copy,Debug,PartialEq, FromPrimitive,ToPrimitive)]
 pub enum Opcode {
     Read  = 1,
     Write = 2,
@@ -30,7 +33,7 @@ pub enum Opcode {
 }
 
 #[allow(dead_code)]
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone,Copy,Debug, FromPrimitive,ToPrimitive)]
 pub enum ErrorNumber {
     NotDefined           = 0,
     FileNotFound         = 1,
@@ -177,6 +180,33 @@ impl<'a> PacketParser<'a> {
         
         return false;
     }
+
+    pub fn parse_error(&mut self) -> Option<ErrorResponse> {
+        let undef_error = ErrorResponse::new_custom("response error with invalid error number".to_owned());
+
+        if !self.opcode_expect(Opcode::Error) {
+            return None;    
+        }
+
+      
+        let err = if let Some(err_raw) = self.number16() {
+            if let Some(err) = ErrorNumber::from_u16(err_raw) 
+                {err}
+            else { return Some(undef_error) }
+        } else {return Some(undef_error)};
+
+        let err_str = if let Some(err_str) = self.string_with_separator() {
+            err_str
+        } else {
+            "".to_owned()
+        };
+
+        return Some(match err {
+            ErrorNumber::NotDefined => { ErrorResponse::new_custom(err_str)},
+            _                       => { ErrorResponse::from(err) }
+        });
+    }
+
 }
 
 

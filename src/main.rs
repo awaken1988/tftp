@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate num_derive;
+
 use clap::{Command, Arg, builder::PossibleValue, ArgAction};
 
 mod server;
