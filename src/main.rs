@@ -1,11 +1,18 @@
+#[macro_use]
+extern crate num_derive;
+
 use clap::{Command, Arg, builder::PossibleValue, ArgAction};
 
 mod server;
 mod client;
 mod protcol;
+mod tlog;
 
 fn main()  {
     let args = Command::new("tftpserver")
+        .author("Martin.K, martin.awake1@gmail.com")
+        .version("0.1.2")
+        .about("TFTP client and server")
         .subcommand(
             Command::new("server")
                 .arg(Arg::new("rootdir")
@@ -43,17 +50,17 @@ fn main()  {
                 .required(true)
                 .help("address of the remote host; ipv4 or ipv6 address; port can also be appended e.g localhost:69")
             )
-            .arg(Arg::new("read")
-                .long("read")
+            .arg(Arg::new("download")
+                .long("download")
                 .required(false)
                 .num_args(1..=2)
-                .help("read a file with the given name from the remote server")
+                .help("download a file with the given name from the remote server")
             )
-            .arg(Arg::new("write")
-                .long("write")
+            .arg(Arg::new("upload")
+                .long("upload")
                 .required(false)
                 .num_args(1..=2)
-                .help("write a file with the given name to the remote server")
+                .help("upload a file with the given name to the remote server")
             )
             .arg(Arg::new("port")
                 .long("port")
@@ -61,10 +68,12 @@ fn main()  {
             )
             .arg(Arg::new("blksize")
                 .long("blksize")
+                .short('b')
                 .help("set the block size of the transfer; default is 512")
             )
             .arg(Arg::new("windowsize")
                 .long("windowsize")
+                .short('w')
                 .help("set the windows size of the transfer; means number of blocks for one ack; default is 1")
             )
         )

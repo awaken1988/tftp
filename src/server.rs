@@ -2,7 +2,7 @@ use std::{net::{UdpSocket, SocketAddr}, time::{Duration, Instant}, sync::{Mutex,
 
 use clap::*;
 
-use crate::protcol;
+use crate::{protcol, tlog};
 
 use self::defs::{WriteMode, ServerSettings, FileLockMode, ClientState};
 
@@ -25,7 +25,7 @@ pub fn server_main(args: &ArgMatches) {
     let rootdir = args.get_one::<String>("rootdir").unwrap();
 
     if !std::path::Path::new(rootdir).is_dir(){
-        panic!("rootdir = \"{}\" does not exists", rootdir);
+        tlog::error!("rootdir = \"{}\" does not exists", rootdir);
     }
 
     let port = args.get_one::<String>("port").unwrap_or(&"69".to_string()).clone();
@@ -117,7 +117,8 @@ fn cleanup_connections(connections: &mut HashMap::<SocketAddr,ClientState>, stop
     }
     for i_con in todo_delete.iter() {
         let state = connections.remove(&i_con).unwrap();
-        println!("INFO: {:?} quit", i_con);
+
+        tlog::info!("{:?} quit", i_con);
         let _ = state.join_handle.unwrap().join();
     }
 

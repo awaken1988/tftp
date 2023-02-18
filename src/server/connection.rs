@@ -1,9 +1,8 @@
 use std::ffi::OsString;
-use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
-use std::time::Instant;
-use std::{sync::mpsc::Receiver, time::Duration};
+use std::time::{Instant, Duration};
+use std::{sync::mpsc::Receiver};
 use std::str::{self, FromStr};
 use std::path::{Path, PathBuf};
 use std::fs::File;
@@ -11,7 +10,8 @@ use std::path;
 
 
 use crate::server::defs::{ServerSettings,WriteMode,FileLockMap, FileLockMode};
-use crate::protcol::*;
+
+use crate::{protcol::*, tlog};
 
 pub struct Connection {
     recv:         Receiver<Vec<u8>>,
@@ -68,31 +68,6 @@ impl Connection {
         self.send_raw_release(buf);
     }
 
-    fn wait_data(&mut self, timeout: Duration, blocknr: u16, out: &mut Vec<u8>) -> Result<()> {
-        let now = Instant::now();
-
-        loop {
-           if now.elapsed() > timeout {
-            break;
-           }
-
-            let     data      = &self.recv.recv_timeout(Duration::from_secs(100)).unwrap()[..];
-            let mut pp = PacketParser::new(&data);
-
-            if !pp.opcode_expect(Opcode::Data) || !pp.number16_expected(blocknr) {
-                continue;
-            }
-
-
-            let recv_data    = &data[DATA_OFFSET..];
-            out.clear();
-            out.extend_from_slice(recv_data);
-            return Ok(());
-        }
-
-        return Result::Err(ErrorResponse::new_custom("timeout wait DATA".to_string()));
-    }
-
     fn get_file_path(&self, path_relative: &str) -> Result<PathBuf> {
         let base_path    = OsString::from(&self.settings.root_dir);
         let request_path = OsString::from(&path_relative);
@@ -144,12 +119,14 @@ impl Connection {
             }
         }
         else {
-            println!("WARN: {:?} double unlock file = {:?}", self.remote, path);
+            tlog::warning!("WARN: {:?} double unlock file = {:?}", self.remote, path);
+
+            tlog::warning!("blablub {:?}", self.remote);
         }
     }
 
-    fn read(&mut self, filename: &str) -> Result<()> {
-        println!("INFO: {:?} Read file {}", self.remote, filename);
+    fn download(&mut self, filename: &str) -> Result<()> {
+        tlog::info!("{:?} Read file {}", self.remote, filename);
 
         let full_path     = self.get_file_path(filename)?;
 
@@ -165,51 +142,29 @@ impl Connection {
         let blocksize  = self.settings.blocksize;
         let windowsize = self.settings.windowsize;
 
-        let mut window_buffer = SendWindowBuffer::new(&mut file, blocksize, windowsize);
+        let mut window_buffer = SendStateMachine::new(&mut file, blocksize, windowsize);
 
-        let mut retries = RETRY_COUNT;
-
-        while retries > 0 {
-            if let Ok(_) = window_buffer.next() {} else {
-                return Err(ErrorResponse::new_custom("cannot get data".to_string()));
+        while let action = window_buffer.next() {
+            match action {
+                SendAction::SendBuffer(bufs) => {
+                    for i_frame in window_buffer.send_data() {
+                        let _ = self.socket.send_to(i_frame, self.remote);
+                    }
+                },
+                SendAction::Timeout => { return Err(ErrorResponse::new_custom("ack timeout".into()));  }
+                SendAction::End => break,
+                _ => {}
             }
 
-            for i_frame in window_buffer.send_data() {
-                let _ = self.socket.send_to(i_frame, self.remote);
-            }
-
-            let mut timeout = OneshotTimer::new(RECV_TIMEOUT);
-
-            loop {
-                if timeout.is_timeout() {
-                    retries-=1; break;
-                }
-
-                let     data      = &self.recv.recv_timeout(Duration::from_secs(4)).unwrap()[..];
-                let mut pp = PacketParser::new(&data);
-    
-                if data.len() != ACK_LEN || !pp.opcode_expect(Opcode::Ack)  {
-                    continue;
-                }
-                
-                let blknum = if let Some(x) = pp.number16() {x} else {continue};
-
-                if window_buffer.ack(blknum) { 
-                    retries = RETRY_COUNT;
-                    break; 
-                }
-            }
-
-            if retries == 0 {
-                return Err(ErrorResponse::new_custom("ack timeout".into()));
-            }
+            if let Ok(data) =  self.recv.recv_timeout(Duration::from_secs(4)) {
+                window_buffer.ack_packet(&data);
+            }        
         }
+
         return Ok(())
     }
 
-    fn write(&mut self, filename: &str) -> Result<()> {
-        println!("INFO: {:?} Write file {}", self.remote, filename);
-
+    fn open_upload_file(&mut self, filename: &str) -> Result<File> {
         if self.settings.write_mode == WriteMode::Disabled {
             return Err(ErrorNumber::AccessViolation.into());
         }
@@ -227,31 +182,36 @@ impl Connection {
             return Err(ErrorResponse::new_custom("file is locked".to_string()));
         }
 
-        let mut file = match File::create(&full_path) {
-            Err(_)      => return Err(ErrorNumber::NotDefined.into()),
-            Ok(x) => x,
+        //TODO: use better varaint... like ok_or
+        return match File::create(&full_path) {
+            Err(_)      => Err(ErrorNumber::NotDefined.into()),
+            Ok(file) => Ok(file),
         };  
+    }
 
-        let mut block_num = 0u16;
-        let mut data: Vec<u8> = vec![];
-        self.send_ack(block_num);
-        loop {
-            block_num = block_num.wrapping_add(1);
+    fn upload(&mut self, filename: &str) -> Result<()> {
+        tlog::info!("{:?} Write file {}", self.remote, filename);
+
+        let timeout_msg = format!("upload timeout; path={}", filename).to_string();
+        let mut file = self.open_upload_file(filename)?;
+        let mut window_buffer = recv_window::Buffer::new(&mut file, self.settings.blocksize, self.settings.windowsize);
+        
+        self.send_ack(0);
+
+        while !window_buffer.is_end() {
+            let recv = if let Ok(recv) = self.recv.recv_timeout(RECV_TIMEOUT) {
+                recv
+            } else { return Err(ErrorResponse::new_custom(timeout_msg.clone())) };
+
+            window_buffer.insert_frame(&recv);
             
-            self.wait_data(RECV_TIMEOUT, block_num, &mut data)?;
-
-            self.bytecount += data.len();
-
-            match file.write(&data) {
-                Err(_) => return Err(ErrorResponse::new_custom("write to file error".to_string())),
-                Ok(_) => {},
+            if let Some(ack) = window_buffer.sync() {
+                self.send_ack(ack);
             }
-            
-            self.send_ack(block_num);
+        }
 
-            if data.len() < self.settings.blocksize {
-                break;
-            }
+        if window_buffer.is_timeout() {
+            return Err(ErrorResponse::new_custom(timeout_msg.clone()));
         }
 
         return Ok(());
@@ -304,11 +264,11 @@ impl Connection {
                 self.settings.windowsize = options.windowsize as usize;
             }
             else {
-                println!("WRN:  {:?} recv extended options but format invalid", self.remote);
+                tlog::warning!("{:?} recv extended options but format invalid", self.remote);
             }
         }
         else {
-            println!("WRN:  {:?} recv extended options but format invalid", self.remote);
+            tlog::warning!("{:?} recv extended options but format invalid", self.remote);
         }
   
         return Ok(ParsedRequest {
@@ -348,29 +308,27 @@ impl Connection {
         let request = match self.parsed_request(data) {
             Ok(request) => request,
             Err(err) => {
-                println!("ERR:  {:?} {}", self.remote, err.to_string());
+                tlog::error!("{:?} {}", self.remote, err.to_string());
                 self.send_error(&err);
                 return;
             }
         };
 
-       
-
         let opcode = request.opcode;
         let filename = request.filename;
-        println!("INFO: {:?}; {:?} {}", self.remote, request.opcode, &filename);
+        tlog::info!("{:?}; {:?} {}", self.remote, request.opcode, &filename);
 
         self.handle_extendes_request();
 
         let result = match opcode {
-            Opcode::Read  => self.read(&filename),
-            Opcode::Write => self.write(&filename),
+            Opcode::Read  => self.download(&filename),
+            Opcode::Write => self.upload(&filename),
             _             => return 
         };
 
         match result {
             Err(err) => {
-                println!("ERR:  {:?} {}", self.remote, err.to_string());
+                tlog::error!("{:?} {}", self.remote, err.to_string());
                 self.send_error(&err);
             },
             _ => {},
@@ -384,7 +342,7 @@ impl Connection {
         //statistics
         let runtime = self.start.elapsed().as_secs_f32();
         let mib_s      = ((self.bytecount as f32) / runtime) / 1000000.0;
-        println!("INFO: {:?} {:?} runtime = {}s; speed = {}MiB/s", self.remote, opcode, runtime, mib_s );
+        tlog::info!("{:?} {:?} runtime = {}s; speed = {}MiB/s", self.remote, opcode, runtime, mib_s );
 
     }    
 }

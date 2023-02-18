@@ -4,6 +4,9 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 use std::default::Default;
 
+use num_traits::FromPrimitive;
+
+
 pub const DEFAULT_BLOCKSIZE:  usize            = 512;
 pub const DEFAULT_WINDOWSIZE: usize            = 1;
 pub const MAX_BLOCKSIZE:      usize            = 1024;
@@ -16,10 +19,10 @@ pub const DATA_BLOCK_NUM:     Range<usize>     = 2..4;
 pub const PACKET_SIZE_MAX:    usize            = 4096;
 pub const BLKSIZE_STR:        &str             = "blksize";
 pub const WINDOW_STR:         &str             = "windowsize";
-pub const RETRY_COUNT:        usize            = 3;
+pub const RETRY_COUNT:        usize            = 3;                 //rename to MAX_RETRIES
 
 
-#[derive(Clone,Copy,Debug,PartialEq)]
+#[derive(Clone,Copy,Debug,PartialEq, FromPrimitive,ToPrimitive)]
 pub enum Opcode {
     Read  = 1,
     Write = 2,
@@ -30,7 +33,7 @@ pub enum Opcode {
 }
 
 #[allow(dead_code)]
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone,Copy,Debug, FromPrimitive,ToPrimitive)]
 pub enum ErrorNumber {
     NotDefined           = 0,
     FileNotFound         = 1,
@@ -177,6 +180,33 @@ impl<'a> PacketParser<'a> {
         
         return false;
     }
+
+    pub fn parse_error(&mut self) -> Option<ErrorResponse> {
+        let undef_error = ErrorResponse::new_custom("response error with invalid error number".to_owned());
+
+        if !self.opcode_expect(Opcode::Error) {
+            return None;    
+        }
+
+      
+        let err = if let Some(err_raw) = self.number16() {
+            if let Some(err) = ErrorNumber::from_u16(err_raw) 
+                {err}
+            else { return Some(undef_error) }
+        } else {return Some(undef_error)};
+
+        let err_str = if let Some(err_str) = self.string_with_separator() {
+            err_str
+        } else {
+            "".to_owned()
+        };
+
+        return Some(match err {
+            ErrorNumber::NotDefined => { ErrorResponse::new_custom(err_str)},
+            _                       => { ErrorResponse::from(err) }
+        });
+    }
+
 }
 
 
@@ -380,27 +410,41 @@ fn ring_diff(a: u16, b: u16) -> usize {
     };
 }
 
-pub struct SendWindowBuffer<'a>
+#[derive(Debug)]
+pub enum SendAction<'a> {
+    SendBuffer(&'a Vec<Vec<u8>>),
+    NoOp,
+    Timeout,
+    End,
+}
+
+pub struct SendStateMachine<'a>
 {
     windowssize:   usize,
     blksize:       usize,
     bufs:          Vec<Vec<u8>>,
     acked:         u16,
+    new_acked:     bool,
     reader:        &'a mut dyn std::io::Read,
     is_reader_end: bool,
     is_end:        bool,
+    timeout:       OneshotTimer,
+    retry:         usize,
 }
 
-impl<'a> SendWindowBuffer<'a> {
-    pub fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) -> SendWindowBuffer {
-        SendWindowBuffer {
+impl<'a> SendStateMachine<'a> {
+    pub fn new(reader: &'a mut dyn std::io::Read, blksize: usize, windowssize: usize) -> SendStateMachine {
+        SendStateMachine {
             windowssize: windowssize,
             blksize: blksize,
             bufs: vec![],
             acked: 0,
+            new_acked: true,
             reader: reader,
             is_reader_end: false,
             is_end: false,
+            timeout: OneshotTimer::new(RECV_TIMEOUT),
+            retry: RETRY_COUNT,
         }
     }
 
@@ -412,16 +456,42 @@ impl<'a> SendWindowBuffer<'a> {
         return &self.bufs;
     }
 
-    pub fn next(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        if self.is_reader_end { 
-            return Ok(self.is_end); 
+    pub fn next(&mut self) -> SendAction {
+        //DELETE: println!("{:?} {:?} {:?} {:?}", self.is_reader_end, self.is_end, self.acked, self.new_acked);
+
+        if self.is_end {
+            return SendAction::End;
         }
 
+        if !self.is_reader_end {
+            self.impl_next();
+        };
+
+        if self.new_acked {
+            self.new_acked  = false;
+            return SendAction::SendBuffer(&self.bufs);
+        }
+        
+        if self.timeout.is_timeout() {
+            if self.retry == 0 {
+                return SendAction::Timeout;
+            }
+            else {
+                self.retry -= 1;
+                return SendAction::SendBuffer(&self.bufs);
+            }
+        };
+
+        return SendAction::NoOp;
+
+    }
+
+    fn impl_next(&mut self) {  
         for i in self.fill_level()..self.windowssize {
             let mut filebuf    = vec![0u8; self.blksize];
             let mut packet_buf = vec![0u8; MAX_BLOCKSIZE];
 
-            let read_len  = self.reader.read(filebuf.as_mut())?;
+            let read_len  =  self.reader.read(filebuf.as_mut()).unwrap();   //TODO: make proper error handling
 
             //fill header
             let next_blknum = self.acked
@@ -440,20 +510,29 @@ impl<'a> SendWindowBuffer<'a> {
                 break;
             }
         } 
-
-        return Ok(self.is_end);
     }
 
-    pub fn ack(&mut self, blknum: u16) -> bool {
+    pub fn ack_packet(&mut self, frame: &[u8]) {
+        let mut pp = PacketParser::new(frame);
+
+        if frame.len() != ACK_LEN || !pp.opcode_expect(Opcode::Ack)  {
+           return;
+        }
+
+        if let Some(num) = pp.number16() {
+            self.ack(num);
+        } 
+    }
+
+    pub fn ack(&mut self, blknum: u16) {
         let diff = ring_diff(self.acked, blknum);
 
-        let mut ret = false;
         if diff > self.windowssize {
-            return ret;
+            return;
         }
         
         for _ in 0..diff {
-            ret = true;
+            self.new_acked = true;
             self.bufs.remove(0);
             self.acked = self.acked.overflowing_add(1).0;
         }
@@ -461,8 +540,12 @@ impl<'a> SendWindowBuffer<'a> {
         if self.is_reader_end && self.bufs.is_empty() {
             self.is_end = true;
         }
+
+        if self.new_acked {
+            self.timeout = OneshotTimer::new(RECV_TIMEOUT);
+            self.retry = RETRY_COUNT;
+        }
         
-        return ret;
     }
 
 }
@@ -523,7 +606,7 @@ pub mod recv_window {
         pub fn sync(&mut self) -> Option<u16> {
             let (ready_blocks, is_last) = self.is_complete();
             let is_blocks = ready_blocks > 0;
-            let is_all_blocks = ready_blocks == self.windowssize;
+            let is_all_blocks = ready_blocks == self.windowssize || is_blocks && is_last;
             let is_timeout = self.timeout.is_timeout();
     
             self.is_end = is_last;

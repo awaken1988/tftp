@@ -2,9 +2,9 @@ use std::{time::{Duration}, fs::File, io::{Read}, path::{PathBuf}, str::FromStr,
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
-use crate::protcol::{Opcode,PacketBuilder, 
+use crate::{protcol::{Opcode,PacketBuilder, 
     TransferMode, Timeout, RECV_TIMEOUT, self, DEFAULT_BLOCKSIZE, 
-    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window};
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window, SendStateMachine, SendAction}, tlog};
 
 struct ClientArguments {
     remote:     String,
@@ -35,7 +35,7 @@ impl ClientArguments {
 }
 
 pub fn client_main(args: &ArgMatches) {
-    let opcode = match (args.get_many::<String>("read"), args.get_many::<String>("write")) {
+    let opcode = match (args.get_many::<String>("download"), args.get_many::<String>("upload")) {
         (Some(_), None) => Opcode::Read,
         (None, Some(_)) => Opcode::Write,
         _               => panic!("invalid client action; only --read or --write possible")
@@ -51,8 +51,6 @@ pub fn client_main(args: &ArgMatches) {
 
     send_initial_packet(opcode, &paths, &mut client_arguments, &mut socket);
 
-    println!("ENDINIT");
-
     let mut timeout = Timeout::new(RECV_TIMEOUT);
 
     loop {
@@ -62,14 +60,13 @@ pub fn client_main(args: &ArgMatches) {
 
         match opcode {
             Opcode::Read => {
-                println!("local {:?}", &paths.local);
                 let mut file = File::create(paths.local).expect("Cannot write file");
-                read_action(&mut socket, &mut file, &client_arguments);
+                download_action(&mut socket, &mut file, &client_arguments);
                 break;
             }
             Opcode::Write => {
                 let mut file = File::open(paths.local).expect("Cannot write file");
-                write_action(&mut socket, &mut file, &client_arguments);
+                upload_action(&mut socket, &mut file, &client_arguments);
                 break;
             }
             _ => panic!("not yet implemented"),
@@ -183,7 +180,7 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &mut Client
 
         if let Ok(recv_map) = pp.extended_options() {
             for (key,value) in &recv_map {
-                println!("INFO: acknowledge {} = {}", key, value);
+                tlog::info!("acknowledge {} = {}", key, value);
             }
  
             if let Ok((options,other)) = filter_extended_options(&recv_map) {
@@ -191,15 +188,15 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &mut Client
                 args.windowsize = options.windowsize as usize;
 
                 if !other.is_empty() {
-                    println!("WARN: Ignored extended options {:?}", other);
+                    tlog::warning!("Ignored extended options {:?}", other);
                 }
             }
             else {
-                println!("WRN: recv extended options but format invalid");
+                tlog::warning!("recv extended options but format invalid");
             }
         }
         else {
-            println!("WRN: recv extended options but format invalid");
+            tlog::warning!("recv extended options but format invalid");
         }
     }
 
@@ -212,9 +209,9 @@ struct ClientFilePath {
 
 fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     let (values, remote_idx, local_idx) = match opcode {
-        Opcode::Read  => (args.get_many::<String>("read"),  0, 1),
-        Opcode::Write => (args.get_many::<String>("write"), 1, 0),
-        _             => panic!("Invalid Operation: only Read or Write allowed"),
+        Opcode::Read  => (args.get_many::<String>("download"),  0, 1),
+        Opcode::Write => (args.get_many::<String>("upload"), 1, 0),
+        _             => panic!("Invalid Operation: only --download or --upload allowed"),
     };
     let values: Vec<&String> = values.unwrap().collect();
 
@@ -247,11 +244,16 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
     }
 }
 
-fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
+fn download_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
     let mut window_buffer = recv_window::Buffer::new(file, arguments.blksize, arguments.windowsize);
 
     while !window_buffer.is_end() {
         if !socket.recv_next() {continue;}
+
+        if let Some(packet_error) = PacketParser::new(socket.recv_buf()).parse_error() {
+            tlog::error!("{}", packet_error.to_string());
+            return;
+        }
 
         window_buffer.insert_frame(socket.recv_buf());
 
@@ -264,65 +266,36 @@ fn read_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientA
     }
 
     if window_buffer.is_timeout() {
-        panic!("Tmeout");
+        tlog::error!("timeout");
     }
-
-    //TODO: show timeout error
 }
 
-fn write_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
-    let mut timeout    =  Timeout::new(RECV_TIMEOUT);
-    let mut expected_ack = 0u16;
-    let mut buf: Vec<u8>        = Vec::new();
-    let mut filebuf: Vec<u8>    = Vec::new();
-    let mut is_last       = false;
-
-    filebuf.resize(protcol::MAX_BLOCKSIZE, 0);
-
-    while !is_last {
-        if timeout.is_timeout() {
-            panic!("timeout");
+fn upload_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
+    let mut window_buffer = SendStateMachine::new(file, arguments.blksize, arguments.windowsize);
+    
+    while let action = window_buffer.next() {
+        match action {
+            SendAction::SendBuffer(bufs) => {
+                for i_frame in window_buffer.send_data() {
+                    socket.send(&i_frame)
+                }
+            },
+            SendAction::Timeout => { 
+                tlog::error!("timeout");
+                return;}
+            SendAction::End => break,
+            _ => {}
         }
 
-        //check ack
-        {
-            if !socket.recv_next() {
-                continue;
-            }
+        if !socket.recv_next() { continue; }
 
-            let mut pp = PacketParser::new(socket.recv_buf());
+        let recv_packet = socket.recv_buf();
 
-            match pp.opcode() {
-                Some(Opcode::Ack) => {
-                    if !pp.number16_expected(expected_ack) {
-                        continue;
-                    }
-
-                },
-                Some(Opcode::Error) => {
-                    panic!("tftp error recv");
-                },
-                _ => {
-                    continue;
-                },
-            }
-
-            expected_ack = expected_ack.overflowing_add(1).0;
-            timeout.reset();
+        if let Some(packet_error) = PacketParser::new(recv_packet).parse_error() {
+            tlog::error!("{}", packet_error.to_string());
+            return;
         }
 
-        PacketBuilder::new(&mut buf).opcode(Opcode::Data).number16(expected_ack);
-
-        let payload_len = match file.read(&mut filebuf[0..arguments.blksize]) {
-            Ok(len) => len,
-            _          => panic!("cannot read from file"),
-        };
-
-        if payload_len != DEFAULT_BLOCKSIZE  {
-            is_last = true;
-        }
-
-        buf.extend_from_slice(&filebuf[0..payload_len]);
-        socket.send(&buf);
+        window_buffer.ack_packet(recv_packet);
     }
 }
