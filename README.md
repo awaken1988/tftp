@@ -15,7 +15,7 @@ tftp server --rootdir C:\tftp\
 
 Download a file from server
 ```
-tftp client --remote 127.0.0.1:69 --read forest01.jpg --blksize 2048 --windowsize 10
+tftp client --remote 127.0.0.1:69 --download forest01.jpg -b 2048 -w 10
 ```
 
 # Features
