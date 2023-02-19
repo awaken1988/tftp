@@ -4,7 +4,7 @@ use clap::ArgMatches;
 use std::net::UdpSocket;
 use crate::{protcol::{Opcode,PacketBuilder, 
     TransferMode, Timeout, RECV_TIMEOUT, self, DEFAULT_BLOCKSIZE, 
-    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvStateMachine, SendStateMachine, SendAction}, tlog};
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvStateMachine, SendStateMachine, SendAction, SEND_RECV_BLOCK_TIMEOUT}, tlog};
 
 struct ClientArguments {
     remote:     String,
@@ -110,7 +110,7 @@ impl SocketSendRecv {
         }
 
         self.read_buf.resize(PACKET_SIZE_MAX, 0);
-        let _           = self.socket.set_read_timeout(Some(Duration::from_secs(1))); 
+        let _           = self.socket.set_read_timeout(Some(SEND_RECV_BLOCK_TIMEOUT)); 
         match self.socket.recv_from(&mut self.read_buf) {
             Ok((size, _)) =>  {
                 self.read_buf.resize(size, 0);

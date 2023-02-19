@@ -11,7 +11,7 @@ mod tlog;
 fn main()  {
     let args = Command::new("tftpserver")
         .author("Martin.K, martin.awake1@gmail.com")
-        .version("0.1.2")
+        .version("0.1.3")
         .about("TFTP client and server")
         .subcommand(
             Command::new("server")

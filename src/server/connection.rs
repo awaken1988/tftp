@@ -156,7 +156,7 @@ impl Connection {
                 _ => {}
             }
 
-            if let Ok(data) =  self.recv.recv_timeout(Duration::from_secs(4)) {
+            if let Ok(data) =  self.recv.recv_timeout(SEND_RECV_BLOCK_TIMEOUT) {
                 window_buffer.ack_packet(&data);
             }        
         }
@@ -199,9 +199,9 @@ impl Connection {
         self.send_ack(0);
 
         while !window_buffer.is_end() {
-            let recv = if let Ok(recv) = self.recv.recv_timeout(RECV_TIMEOUT) {
+            let recv = if let Ok(recv) = self.recv.recv_timeout(SEND_RECV_BLOCK_TIMEOUT) {
                 recv
-            } else { return Err(ErrorResponse::new_custom(timeout_msg.clone())) };
+            } else { continue; };
 
             window_buffer.insert_frame(&recv);
             

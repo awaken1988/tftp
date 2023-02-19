@@ -11,7 +11,14 @@ pub const DEFAULT_BLOCKSIZE:  usize            = 512;
 pub const DEFAULT_WINDOWSIZE: usize            = 1;
 pub const MAX_BLOCKSIZE:      usize            = 1024;
 pub const MAX_PACKET_SIZE:    usize            = MAX_BLOCKSIZE + DATA_BLOCK_NUM.end;
-pub const RECV_TIMEOUT:       Duration         = Duration::from_secs(2);
+
+pub const SEND_RECV_BLOCK_TIMEOUT:  Duration   = Duration::from_millis(1000);
+pub const RESEND_TIMEOUT:           Duration   = Duration::from_millis(2000);
+pub const RECV_TIMEOUT:             Duration   = Duration::from_millis(6500);
+pub const RECV_ACK_TIMEOUT:         Duration   = Duration::from_millis(2500);
+
+pub const RETRY_COUNT:              usize      = 3;                 //rename to MAX_RETRIES
+
 pub const OPCODE_LEN:         usize            = 2;
 pub const ACK_LEN:            usize            = 4;
 pub const DATA_OFFSET:        usize            = 4;
@@ -19,7 +26,7 @@ pub const DATA_BLOCK_NUM:     Range<usize>     = 2..4;
 pub const PACKET_SIZE_MAX:    usize            = 4096;
 pub const BLKSIZE_STR:        &str             = "blksize";
 pub const WINDOW_STR:         &str             = "windowsize";
-pub const RETRY_COUNT:        usize            = 3;                 //rename to MAX_RETRIES
+
 
 
 #[derive(Clone,Copy,Debug,PartialEq, FromPrimitive,ToPrimitive)]
@@ -443,7 +450,7 @@ impl<'a> SendStateMachine<'a> {
             reader: reader,
             is_reader_end: false,
             is_end: false,
-            timeout: OneshotTimer::new(RECV_TIMEOUT),
+            timeout: OneshotTimer::new(RESEND_TIMEOUT),
             retry: RETRY_COUNT,
         }
     }
@@ -542,7 +549,7 @@ impl<'a> SendStateMachine<'a> {
         }
 
         if self.new_acked {
-            self.timeout = OneshotTimer::new(RECV_TIMEOUT);
+            self.timeout.reset();
             self.retry = RETRY_COUNT;
         }
         
@@ -551,14 +558,15 @@ impl<'a> SendStateMachine<'a> {
 }
 
 pub struct RecvStateMachine<'a> {
-    windowssize:   usize,
-    blksize:       usize,
-    bufs:          Vec<Option<Vec<u8>>>,
-    acked:         u16,
-    is_end:        bool,
-    is_timeout:    bool,
-    timeout:       OneshotTimer,
-    writer:        &'a mut dyn std::io::Write,
+    windowssize:      usize,
+    blksize:          usize,
+    bufs:             Vec<Option<Vec<u8>>>,
+    acked:            u16,
+    is_end:           bool,
+    is_timeout:       bool,
+    timeout:          OneshotTimer,
+    lost_ack_timeout: Option<Instant>,
+    writer:           &'a mut dyn std::io::Write,
 }
 
 impl<'a> RecvStateMachine<'a> {
@@ -566,11 +574,12 @@ impl<'a> RecvStateMachine<'a> {
         RecvStateMachine {
             windowssize: windowssize,
             blksize: blksize,
-            bufs: vec![None; 10],
+            bufs: vec![None; windowssize],
             acked: 0,
             is_end: false,
             is_timeout: false,
             timeout: OneshotTimer::new(RECV_TIMEOUT),
+            lost_ack_timeout: None,
             writer: writer
         }
     }
@@ -593,11 +602,13 @@ impl<'a> RecvStateMachine<'a> {
 
         if !is_data {return};
 
-        let diff = ring_diff(self.acked, blocknr);
-        if diff > self.windowssize { return; }
+        let diff = ring_diff(self.acked, blocknr); 
+        if diff > self.windowssize || diff == 0 { return; }
         
         let idx = diff.overflowing_sub(1).0;
+
         self.bufs[idx] = Some(Vec::from(data));
+        self.lost_ack_timeout = None;
 
         self.timeout.explicit_start();
     }
@@ -609,6 +620,13 @@ impl<'a> RecvStateMachine<'a> {
         let is_timeout = self.timeout.is_timeout();
 
         self.is_end = is_last;
+
+        if let Some(lost_ack_timeout) = self.lost_ack_timeout {
+            if lost_ack_timeout.elapsed() > RECV_ACK_TIMEOUT {
+                self.lost_ack_timeout = Some(Instant::now());
+                return Some(self.acked)
+            }
+        }
 
         if !is_blocks && is_timeout {
             self.is_timeout = true;
@@ -631,6 +649,10 @@ impl<'a> RecvStateMachine<'a> {
         self.acked  = self.acked.overflowing_add(ready_blocks as u16).0;
         self.is_end = is_last;
 
+        if !self.is_end {
+            self.lost_ack_timeout = Some(Instant::now());
+        }
+    
         return Some(self.acked);
     }     
 
@@ -666,6 +688,7 @@ impl<'a> RecvStateMachine<'a> {
 
 
 //TODO: move this to another place
+#[derive(Debug)]
 pub struct OneshotTimer {
     start:   Option<Instant>,
     timeout: Duration,
@@ -682,11 +705,15 @@ impl OneshotTimer {
 
     pub fn is_timeout(&mut self) -> bool {
         if let Some(x) = self.start {
-            return x.duration_since(Instant::now()) > self.timeout;
+            return x.elapsed() > self.timeout;
         } else {
             self.explicit_start();
             return false;
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.start = None;
     }
 }
 
