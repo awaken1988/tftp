@@ -4,7 +4,7 @@ use clap::ArgMatches;
 use std::net::UdpSocket;
 use crate::{protcol::{Opcode,PacketBuilder, 
     TransferMode, Timeout, RECV_TIMEOUT, self, DEFAULT_BLOCKSIZE, 
-    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, recv_window, SendStateMachine, SendAction}, tlog};
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvStateMachine, SendStateMachine, SendAction}, tlog};
 
 struct ClientArguments {
     remote:     String,
@@ -245,7 +245,7 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
 }
 
 fn download_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
-    let mut window_buffer = recv_window::Buffer::new(file, arguments.blksize, arguments.windowsize);
+    let mut window_buffer = RecvStateMachine::new(file, arguments.blksize, arguments.windowsize);
 
     while !window_buffer.is_end() {
         if !socket.recv_next() {continue;}

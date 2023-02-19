@@ -194,7 +194,7 @@ impl Connection {
 
         let timeout_msg = format!("upload timeout; path={}", filename).to_string();
         let mut file = self.open_upload_file(filename)?;
-        let mut window_buffer = recv_window::Buffer::new(&mut file, self.settings.blocksize, self.settings.windowsize);
+        let mut window_buffer = RecvStateMachine::new(&mut file, self.settings.blocksize, self.settings.windowsize);
         
         self.send_ack(0);
 
