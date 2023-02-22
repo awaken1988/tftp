@@ -9,9 +9,9 @@ mod protcol;
 mod tlog;
 
 fn main()  {
-    let args = Command::new("tftpserver")
+    let mut app = Command::new("tftpserver")
         .author("Martin.K, martin.awake1@gmail.com")
-        .version("0.1.3")
+        .version("0.1.4")
         .about("TFTP client and server")
         .subcommand(
             Command::new("server")
@@ -76,13 +76,17 @@ fn main()  {
                 .short('w')
                 .help("set the windows size of the transfer; means number of blocks for one ack; default is 1")
             )
-        )
-        .get_matches();
+        );
+
+    let args = app.clone().get_matches();
 
     match args.subcommand() {
         Some(("server", args)) => server::server_main(args),
         Some(("client", args)) => client::client_main(args),
-        _ => panic!("Invalid command; only allowed: server, client")
+        _ => {
+            tlog::error!("no command specified");
+            let _ = app.print_help();
+        }
     }
 
     
