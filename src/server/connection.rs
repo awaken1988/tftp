@@ -120,14 +120,10 @@ impl Connection {
         }
         else {
             tlog::warning!("WARN: {:?} double unlock file = {:?}", self.remote, path);
-
-            tlog::warning!("blablub {:?}", self.remote);
         }
     }
 
     fn download(&mut self, filename: &str) -> Result<()> {
-        tlog::info!("{:?} Read file {}", self.remote, filename);
-
         let full_path     = self.get_file_path(filename)?;
 
         if !self.check_lock_file(&full_path, FileLockMode::Read(1)) {
@@ -192,8 +188,6 @@ impl Connection {
     }
 
     fn upload(&mut self, filename: &str) -> Result<()> {
-        tlog::info!("{:?} Write file {}", self.remote, filename);
-
         let timeout_msg = format!("upload timeout; path={}", filename).to_string();
         let mut file = self.open_upload_file(filename)?;
         let mut window_buffer = RecvStateMachine::new(&mut file, self.settings.blocksize, self.settings.windowsize);
@@ -318,7 +312,7 @@ impl Connection {
 
         let opcode = request.opcode;
         let filename = request.filename;
-        tlog::info!("{:?}; {:?} {}", self.remote, request.opcode, &filename);
+        tlog::info!("{:?} {:?} {}", self.remote, request.opcode, &filename);
 
         self.handle_extendes_request();
 
