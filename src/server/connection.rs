@@ -161,6 +161,8 @@ impl Connection {
             }        
         }
 
+        self.bytecount = window_buffer.read_len();
+
         return Ok(())
     }
 

@@ -437,6 +437,7 @@ pub struct SendStateMachine<'a>
     is_end:        bool,
     timeout:       OneshotTimer,
     retry:         usize,
+    data_read:     usize,
 }
 
 impl<'a> SendStateMachine<'a> {
@@ -452,6 +453,7 @@ impl<'a> SendStateMachine<'a> {
             is_end: false,
             timeout: OneshotTimer::new(RESEND_TIMEOUT),
             retry: RETRY_COUNT,
+            data_read: 0,
         }
     }
 
@@ -493,6 +495,10 @@ impl<'a> SendStateMachine<'a> {
 
     }
 
+    pub fn read_len(&self) -> usize {
+        return self.data_read;
+    }
+
     fn impl_next(&mut self) {  
         for i in self.fill_level()..self.windowssize {
             let mut filebuf    = vec![0u8; self.blksize];
@@ -511,6 +517,8 @@ impl<'a> SendStateMachine<'a> {
                 .raw_data(&filebuf[0..(read_len as usize)]);
 
             self.bufs.push(packet_buf);
+
+            self.data_read += read_len;
 
             if read_len < self.blksize {
                 self.is_reader_end = true;

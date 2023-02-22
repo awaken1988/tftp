@@ -26,6 +26,7 @@ pub fn server_main(args: &ArgMatches) {
 
     if !std::path::Path::new(rootdir).is_dir(){
         tlog::error!("rootdir = \"{}\" does not exists", rootdir);
+        return;
     }
 
     let port = args.get_one::<String>("port").unwrap_or(&"69".to_string()).clone();
