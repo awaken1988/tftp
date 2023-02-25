@@ -565,6 +565,42 @@ impl<'a> SendStateMachine<'a> {
 
 }
 
+pub struct RecvController<'a> {
+    windowssize:      usize,
+    blksize:          usize,
+    //write_fn:         Box<dyn Fn([&[u8]])>,
+    ack_fn:           Box<dyn FnMut(u16) + 'a>,
+}
+
+impl<'a> RecvController<'a> {
+    fn run(&mut self) {
+        let data = [1u8,2u8,3u8];
+
+        for i in 0..16 {
+            (self.ack_fn)(1);
+        }
+    }
+}
+
+pub fn test_run() {
+    let mut x = 0;
+    {
+        let mut ctrl = RecvController {
+            windowssize: 1,
+            blksize: 1,
+            ack_fn: Box::new(|blk: u16| {
+                println!("ack {}", blk);
+                x += 1;
+            })
+        };
+
+        ctrl.run();
+    }
+
+   println!("x {}", x)
+}
+
+
 pub struct RecvStateMachine<'a> {
     windowssize:      usize,
     blksize:          usize,
