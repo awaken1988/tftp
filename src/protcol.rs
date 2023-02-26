@@ -213,7 +213,6 @@ impl<'a> PacketParser<'a> {
             _                       => { ErrorResponse::from(err) }
         });
     }
-
 }
 
 
@@ -565,40 +564,119 @@ impl<'a> SendStateMachine<'a> {
 
 }
 
+enum RecvCallbackArg<'a> {
+    WriteSink(&'a [u8]),
+    Ack(&'a [u8]),
+    Recv(&'a mut Vec<u8>, Duration),
+}
+
 pub struct RecvController<'a> {
     windowssize:      usize,
     blksize:          usize,
-    write_fn:         Box<dyn FnMut(&[u16])>,
-    ack_fn:           Box<dyn FnMut(u16) + 'a>,
+    callback:         Box<dyn FnMut(&'a mut RecvCallbackArg) + 'a>,
+    acked:            u16,
+    window_buf:       Vec<Option<Vec<u8>>>, //TODO: use ringbuffer
+    ack_buf:          Vec<u8>,
 }
 
 impl<'a> RecvController<'a> {
-    fn run(&mut self) {
-        let data = [1u8,2u8,3u8];
+    pub fn run(&mut self) -> Result<(), String> {
+        let mut  bufs:  Vec<Option<Vec<u8>>> = vec![None; self.windowssize];
 
-        for i in 0..3 {
-            (self.ack_fn)(1);
-            (self.write_fn)(&[1,2, i as u16]);
+        loop {
+            let _ = self.fill_window()?;
+
+            let (write_count, is_last) = self.is_complete();
+
+            if write_count == self.windowssize || is_last {
+                for i_write in 0..write_count {
+                    (self.callback)(&mut RecvCallbackArg::WriteSink(&self.window_buf[i_write].unwrap()));
+                }
+                for i_write in 0..write_count {
+                    self.window_buf.remove(0);
+                    self.window_buf.push(None);
+                }
+            }
         }
     }
+
+    fn fill_window(&mut self) -> Result<(), String> {
+        let mut buf: Vec<u8> = Vec::new();
+        
+        for i_retry in 0..RETRY_COUNT {
+            if i_retry > 0 && self.acked > 0 {
+                buf.clear();
+                self.send_ack(self.acked)
+            }
+
+            buf.clear();
+            (self.callback)(&mut RecvCallbackArg::Recv(buf, RECV_TIMEOUT));
+
+            if buf.is_empty() {continue;}
+
+            let mut pp = PacketParser::new(buf);
+            let is_data = pp.opcode_expect(Opcode::Data);
+            if !is_data {continue;}
+
+            let blocknr = if let Some(blocknr) = pp.number16() {blocknr} else {continue;};
+            let data = pp.remaining_bytes();
+
+            let diff = ring_diff(self.acked, blocknr); 
+            if diff > self.windowssize || diff == 0 { continue; }
+            let idx = diff.overflowing_sub(1).0;
+
+            self.window_buf[idx] = Some(data.to_owned());
+
+            return Ok(blocknr);
+        }
+        
+        return Err("timeout".into());
+    }
+
+    fn send_ack(&mut self, blocknr: u16) {
+        PacketBuilder::new(&mut self.ack_buf)
+            .opcode(Opcode::Ack)
+            .number16(blocknr);
+        (self.callback)(&mut RecvCallbackArg::Ack(&self.ack_buf));
+    }
+
+    fn is_complete(&self) -> (usize,bool) {
+        let mut ready_blocks = 0;
+        let mut is_last = false;
+
+        for i in &self.window_buf {
+            if let Some(data) =  i {
+                ready_blocks+=1;
+                if data.len() < self.blksize {
+                    is_last = true;
+                    break;
+                }
+            } else {
+                return (ready_blocks, is_last);
+            }
+        }
+
+        return (ready_blocks, is_last);
+    }
+
 }
 
 pub fn test_run() {
     let mut x = 0;
     {
-        let mut ctrl = RecvController {
-            windowssize: 1,
-            blksize: 1,
-            write_fn: Box::new(|data: &[u16]|{
-                println!("write {:?}", data);
-            }),
-            ack_fn: Box::new(|blk: u16| {
-                println!("ack {}", blk);
-                x += 1;
-            })
-        };
+        // let mut ctrl = RecvController {
+        //     windowssize: 1,
+        //     blksize: 1,
+        //     write_fn: Box::new(|data: &[u16]|{
+        //         println!("write {:?}", data);
+        //     }),
+        //     ack_fn: Box::new(|blk: u16| {
+        //         println!("ack {}", blk);
+        //         x += 1;
+        //     })
+        // };
 
-        ctrl.run();
+        // ctrl.run();
     }
 
    println!("x {}", x)
