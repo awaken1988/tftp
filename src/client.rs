@@ -264,31 +264,6 @@ fn download_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &Cli
         Err(err) =>  tlog::error!("{}", &err),
         _ => {}
     }
-
-
-    // let mut window_buffer = RecvStateMachine::new(file, arguments.blksize, arguments.windowsize);
-
-    // while !window_buffer.is_end() {
-    //     if !socket.recv_next() {continue;}
-
-    //     if let Some(packet_error) = PacketParser::new(socket.recv_buf()).parse_error() {
-    //         tlog::error!("{}", packet_error.to_string());
-    //         return;
-    //     }
-
-    //     window_buffer.insert_frame(socket.recv_buf());
-
-    //     if let Some(ack_window) = window_buffer.sync() {
-    //         let mut buf: Vec<u8>        = Vec::new();
-    //         let _ = socket.send(PacketBuilder::new(&mut buf)
-    //             .opcode(Opcode::Ack)
-    //             .number16(ack_window).as_bytes());
-    //     }        
-    // }
-
-    // if window_buffer.is_timeout() {
-    //     tlog::error!("timeout");
-    // }
 }
 
 fn upload_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {

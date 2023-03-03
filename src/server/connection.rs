@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::io::Write;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::DerefMut;
 use std::time::{Instant, Duration};
@@ -11,7 +12,7 @@ use std::path;
 
 use crate::server::defs::{ServerSettings,WriteMode,FileLockMap, FileLockMode};
 
-use crate::{tftp_protocol::*, tlog};
+use crate::{tftp_protocol::{*, self}, tlog};
 
 pub struct Connection {
     recv:         Receiver<Vec<u8>>,
@@ -37,6 +38,10 @@ impl Connection {
     fn send_raw_release(&mut self, buf: Vec<u8>) {
         self.socket.send_to(&buf, self.remote).unwrap();
         self.buf = Some(buf);
+    }
+
+    fn send_raw(&mut self, packet: &[u8]) {
+        self.socket.send_to(packet, self.remote).unwrap();
     }
 
     fn send_error(&mut self, error: &ErrorResponse) {
@@ -190,27 +195,27 @@ impl Connection {
     fn upload(&mut self, filename: &str) -> Result<()> {
         let timeout_msg = format!("upload timeout; path={}", filename).to_string();
         let mut file = self.open_upload_file(filename)?;
-        let mut window_buffer = RecvStateMachine::new(&mut file, self.settings.blocksize, self.settings.windowsize);
-        
-        self.send_ack(0);
 
-        while !window_buffer.is_end() {
-            let recv = if let Ok(recv) = self.recv.recv_timeout(SEND_RECV_BLOCK_TIMEOUT) {
-                recv
-            } else { continue; };
-
-            window_buffer.insert_frame(&recv);
-            
-            if let Some(ack) = window_buffer.sync() {
-                self.send_ack(ack);
+        let mut ctrl_result = RecvController::new(self.settings.windowsize, self.settings.blocksize, Box::new(|action| {
+            match action {
+                tftp_protocol::RecvCallbackArg::WriteSink(data) => {
+                    file.write(data);
+                },
+                tftp_protocol::RecvCallbackArg::Ack(ack_packet) => {
+                    let _ = self.send_raw(ack_packet);
+                }
+                tftp_protocol::RecvCallbackArg::Recv(out_buff, timeout) => {
+                    if let Ok(data) = self.recv.recv_timeout(timeout) {
+                        out_buff.write_all(&data);
+                    }
+                }
             }
+        })).run();
+    
+        match ctrl_result {
+            Err(err) => return Err(ErrorResponse::new_custom(err.clone())),
+            _ => return Ok(())
         }
-
-        if window_buffer.is_timeout() {
-            return Err(ErrorResponse::new_custom(timeout_msg.clone()));
-        }
-
-        return Ok(());
     }
 
     pub fn new(recv: Receiver<Vec<u8>>, remote: SocketAddr, socket: UdpSocket, settings: ServerSettings, lockmap: FileLockMap) -> Connection {
