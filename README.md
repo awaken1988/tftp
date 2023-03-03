@@ -32,4 +32,5 @@ tftp client --remote 127.0.0.1:69 --download forest01.jpg -b 2048 -w 10
  # Planned
  * Fix behaviour on packet loss (e.g ACK loss)
  * Implement Generators (Download from e.g e number generator)
- * Add UnitTest which tests timeout and missing packets 
+ * Add UnitTest which tests timeout and missing packets
+ * Reuse buffers / reduce allocations
