@@ -11,7 +11,7 @@ use std::path;
 
 use crate::server::defs::{ServerSettings,WriteMode,FileLockMap, FileLockMode};
 
-use crate::{protcol::*, tlog};
+use crate::{tftp_protocol::*, tlog};
 
 pub struct Connection {
     recv:         Receiver<Vec<u8>>,

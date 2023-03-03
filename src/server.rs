@@ -2,7 +2,7 @@ use std::{net::{UdpSocket, SocketAddr}, time::{Duration, Instant}, sync::{Mutex,
 
 use clap::*;
 
-use crate::{protcol, tlog};
+use crate::{tftp_protocol, tlog};
 
 use self::defs::{WriteMode, ServerSettings, FileLockMode, ClientState};
 
@@ -35,8 +35,8 @@ pub fn server_main(args: &ArgMatches) {
     let settings = ServerSettings {
         write_mode:        writemode,
         root_dir:          rootdir.clone(),
-        blocksize:         protcol::DEFAULT_BLOCKSIZE,
-        windowsize:        protcol::DEFAULT_WINDOWSIZE,
+        blocksize:         tftp_protocol::DEFAULT_BLOCKSIZE,
+        windowsize:        tftp_protocol::DEFAULT_WINDOWSIZE,
         verbose:           true, 
         exit_with_client:  *args.get_one::<bool>("exit-with-client").unwrap(),
         port:              port
@@ -62,7 +62,7 @@ pub fn run_server(settings: ServerSettings) {
             break;
         }
     
-        buf.resize(protcol::MAX_PACKET_SIZE, 0);
+        buf.resize(tftp_protocol::MAX_PACKET_SIZE, 0);
 
         let (amt, src) = match socket.recv_from(&mut buf) {
             Ok((size,socket)) => (size,socket),

@@ -1,10 +1,10 @@
-use std::{time::{Duration}, fs::File, io::{Read}, path::{PathBuf}, str::FromStr, env};
+use std::{time::{Duration}, fs::File, io::{Read, Write}, path::{PathBuf}, str::FromStr, env};
 
 use clap::ArgMatches;
 use std::net::UdpSocket;
-use crate::{protcol::{Opcode,PacketBuilder, 
+use crate::{tftp_protocol::{Opcode,PacketBuilder, 
     TransferMode, Timeout, RECV_TIMEOUT, self, DEFAULT_BLOCKSIZE, 
-    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvStateMachine, SendStateMachine, SendAction, SEND_RECV_BLOCK_TIMEOUT}, tlog};
+    PACKET_SIZE_MAX, PacketParser, DEFAULT_WINDOWSIZE, BLKSIZE_STR, WINDOW_STR, filter_extended_options, RecvStateMachine, SendStateMachine, SendAction, SEND_RECV_BLOCK_TIMEOUT, RecvController}, tlog};
 
 struct ClientArguments {
     remote:     String,
@@ -103,14 +103,14 @@ impl SocketSendRecv {
         }
     }
 
-    fn recv_next(&mut self) -> bool {
+    fn recv_next(&mut self, timeout: Duration) -> bool {
         if self.defer {
             self.defer = false;
             return true;
         }
 
         self.read_buf.resize(PACKET_SIZE_MAX, 0);
-        let _           = self.socket.set_read_timeout(Some(SEND_RECV_BLOCK_TIMEOUT)); 
+        let _           = self.socket.set_read_timeout(Some(timeout)); 
         match self.socket.recv_from(&mut self.read_buf) {
             Ok((size, _)) =>  {
                 self.read_buf.resize(size, 0);
@@ -165,7 +165,7 @@ fn send_initial_packet(opcode: Opcode, paths: &ClientFilePath, args: &mut Client
 
     //try parse extended options
     {
-        if !socket.recv_next() {
+        if !socket.recv_next(SEND_RECV_BLOCK_TIMEOUT) {
             return;
         }
 
@@ -245,29 +245,50 @@ fn get_connection_paths(opcode: Opcode, args: &ArgMatches) -> ClientFilePath {
 }
 
 fn download_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
-    let mut window_buffer = RecvStateMachine::new(file, arguments.blksize, arguments.windowsize);
-
-    while !window_buffer.is_end() {
-        if !socket.recv_next() {continue;}
-
-        if let Some(packet_error) = PacketParser::new(socket.recv_buf()).parse_error() {
-            tlog::error!("{}", packet_error.to_string());
-            return;
+    let mut ctrl_result = RecvController::new(arguments.windowsize, arguments.blksize, Box::new(|action| {
+        match action {
+            tftp_protocol::RecvCallbackArg::WriteSink(data) => {
+                file.write(data);
+            },
+            tftp_protocol::RecvCallbackArg::Ack(ack_packet) => {
+                let _ = socket.send(ack_packet);
+            }
+            tftp_protocol::RecvCallbackArg::Recv(out_buff, timeout) => {
+                if !socket.recv_next(timeout) {return;}
+                out_buff.write_all(socket.recv_buf());
+            }
         }
+    })).run();
 
-        window_buffer.insert_frame(socket.recv_buf());
-
-        if let Some(ack_window) = window_buffer.sync() {
-            let mut buf: Vec<u8>        = Vec::new();
-            let _ = socket.send(PacketBuilder::new(&mut buf)
-                .opcode(Opcode::Ack)
-                .number16(ack_window).as_bytes());
-        }        
+    match ctrl_result {
+        Err(err) =>  tlog::error!("{}", &err),
+        _ => {}
     }
 
-    if window_buffer.is_timeout() {
-        tlog::error!("timeout");
-    }
+
+    // let mut window_buffer = RecvStateMachine::new(file, arguments.blksize, arguments.windowsize);
+
+    // while !window_buffer.is_end() {
+    //     if !socket.recv_next() {continue;}
+
+    //     if let Some(packet_error) = PacketParser::new(socket.recv_buf()).parse_error() {
+    //         tlog::error!("{}", packet_error.to_string());
+    //         return;
+    //     }
+
+    //     window_buffer.insert_frame(socket.recv_buf());
+
+    //     if let Some(ack_window) = window_buffer.sync() {
+    //         let mut buf: Vec<u8>        = Vec::new();
+    //         let _ = socket.send(PacketBuilder::new(&mut buf)
+    //             .opcode(Opcode::Ack)
+    //             .number16(ack_window).as_bytes());
+    //     }        
+    // }
+
+    // if window_buffer.is_timeout() {
+    //     tlog::error!("timeout");
+    // }
 }
 
 fn upload_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &ClientArguments) {
@@ -287,7 +308,7 @@ fn upload_action(socket: &mut SocketSendRecv, file: &mut File, arguments: &Clien
             _ => {}
         }
 
-        if !socket.recv_next() { continue; }
+        if !socket.recv_next(SEND_RECV_BLOCK_TIMEOUT) { continue; }
 
         let recv_packet = socket.recv_buf();
 
