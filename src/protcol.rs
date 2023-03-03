@@ -573,7 +573,7 @@ enum RecvCallbackArg<'a> {
 pub struct RecvController<'a> {
     windowssize:      usize,
     blksize:          usize,
-    callback:         Box<dyn FnMut(&'a mut RecvCallbackArg) + 'a>,
+    callback:         Box<dyn FnMut(RecvCallbackArg) + 'a>,
     acked:            u16,
     window_buf:       Vec<Option<Vec<u8>>>, //TODO: use ringbuffer
     ack_buf:          Vec<u8>,
@@ -583,19 +583,23 @@ impl<'a> RecvController<'a> {
     pub fn run(&mut self) -> Result<(), String> {
         let mut  bufs:  Vec<Option<Vec<u8>>> = vec![None; self.windowssize];
 
-        loop {
-            let _ = self.fill_window()?;
+        loop { 
+            self.fill_window()?;
+            self.write_window();
+        }
+    }
 
-            let (write_count, is_last) = self.is_complete();
+    fn write_window(&mut self) {
+        let (write_count, is_last) = self.is_complete();
 
-            if write_count == self.windowssize || is_last {
-                for i_write in 0..write_count {
-                    (self.callback)(&mut RecvCallbackArg::WriteSink(&self.window_buf[i_write].unwrap()));
-                }
-                for i_write in 0..write_count {
-                    self.window_buf.remove(0);
-                    self.window_buf.push(None);
-                }
+        if write_count == self.windowssize || is_last {
+            for i_write in 0..write_count {
+                let data = RecvCallbackArg::WriteSink(&(self.window_buf[i_write].as_ref().unwrap()));
+                (self.callback)(data);
+            }
+            for i_write in 0..write_count {
+                self.window_buf.remove(0);
+                self.window_buf.push(None);
             }
         }
     }
@@ -610,24 +614,30 @@ impl<'a> RecvController<'a> {
             }
 
             buf.clear();
-            (self.callback)(&mut RecvCallbackArg::Recv(buf, RECV_TIMEOUT));
+            (self.callback)(RecvCallbackArg::Recv(&mut buf, RECV_TIMEOUT));
 
             if buf.is_empty() {continue;}
 
-            let mut pp = PacketParser::new(buf);
+            //parse packet
+            let mut pp = PacketParser::new(&buf);
             let is_data = pp.opcode_expect(Opcode::Data);
             if !is_data {continue;}
 
             let blocknr = if let Some(blocknr) = pp.number16() {blocknr} else {continue;};
             let data = pp.remaining_bytes();
 
+            //fit blocknummer in our windows
             let diff = ring_diff(self.acked, blocknr); 
             if diff > self.windowssize || diff == 0 { continue; }
             let idx = diff.overflowing_sub(1).0;
 
+            if self.window_buf[idx].is_some() {
+                continue;
+            }
+
             self.window_buf[idx] = Some(data.to_owned());
 
-            return Ok(blocknr);
+            return Ok(());
         }
         
         return Err("timeout".into());
@@ -637,7 +647,7 @@ impl<'a> RecvController<'a> {
         PacketBuilder::new(&mut self.ack_buf)
             .opcode(Opcode::Ack)
             .number16(blocknr);
-        (self.callback)(&mut RecvCallbackArg::Ack(&self.ack_buf));
+        (self.callback)(RecvCallbackArg::Ack(&self.ack_buf));
     }
 
     fn is_complete(&self) -> (usize,bool) {
