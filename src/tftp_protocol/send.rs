@@ -147,3 +147,34 @@ impl<'a> SendStateMachine<'a> {
     }
 
 }
+
+
+
+
+
+
+//Maybe that would be the new variant
+
+struct SendController
+{
+    windowssize: usize,
+    blksize: usize,
+}
+
+enum SendCallbackArg<'a>
+{
+    Data(&'a mut Vec<u8>)
+    //TODO: Timeout...
+}
+
+
+impl SendController
+{
+    pub fn run<'a, T>(callback: &'a mut T) 
+    where 
+        T: FnMut(&SendCallbackArg)    
+    {
+        let mut buff: Vec<u8> = Vec::new();
+        (*callback)(&SendCallbackArg::Data(&mut buff));
+    }
+}
