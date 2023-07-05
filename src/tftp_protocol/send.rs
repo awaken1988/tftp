@@ -1,4 +1,5 @@
 use super::*;
+use std::{io::{Read}, collections::VecDeque};
 
 #[derive(Debug)]
 pub enum SendAction<'a> {
@@ -155,26 +156,79 @@ impl<'a> SendStateMachine<'a> {
 
 //Maybe that would be the new variant
 
-struct SendController
+pub enum SendCallbackArg<'a>
+{
+    Send(&'a [u8]),
+    Recv(&'a [u8]),
+}
+pub struct SendControllerArg<'a>
 {
     windowssize: usize,
     blksize: usize,
+    data_src: &'a dyn Read,
 }
 
-enum SendCallbackArg<'a>
-{
-    Data(&'a mut Vec<u8>)
-    //TODO: Timeout...
+pub struct SendController<'a> {
+    send_buffer: VecDeque::<Vec<u8>>,
+    arg: &'a SendControllerArg<'a>,
+    is_end: bool,
 }
 
-
-impl SendController
-{
-    pub fn run<'a, T>(callback: &'a mut T) 
-    where 
-        T: FnMut(&SendCallbackArg)    
-    {
-        let mut buff: Vec<u8> = Vec::new();
-        (*callback)(&SendCallbackArg::Data(&mut buff));
+impl<'a> SendController<'a> {
+    pub fn new(arg: &'a SendControllerArg<'a>) -> SendController<'a> {
+        SendController {
+            send_buffer: VecDeque::<Vec<u8>>::new(),
+            arg: arg,
+            is_end: false,
+        }
     }
+
+    pub fn run(&mut self) {
+        loop {
+
+        }
+    }
+
+    fn fill_and_send(&mut self) {
+        let data_src = self.arg.data_src;
+
+        let mut blk_buffer = Vec::new();
+
+        while !self.is_end || self.send_buffer.len() < self.arg.windowssize {
+            blk_buffer.resize(self.arg.blksize, 0)
+            let result = data_src.read(&mut blk_buffer);
+            
+            if let Ok(result) = result {
+                blk_buffer.resize(result, 0);
+
+            }
+
+
+        }
 }
+
+
+
+
+//impl<'a> SendController<'a>
+//{
+//    pub fn new(callback: &'a mut T)
+//    where 
+//        T: FnMut(&SendCallbackArg)  {
+//
+//        }
+//
+//    //pub fn run<'a, T>(callback: &'a mut T) 
+//    //where 
+//    //    T: FnMut(&SendCallbackArg)    
+//    //{
+//    //    let mut buff: Vec<u8> = Vec::new();
+//    //    (*callback)(&SendCallbackArg::Data(&mut buff));
+//    //}
+//
+//    fn run(&mut self) {
+//        loop {
+//
+//        }
+//    }
+//}

@@ -2,6 +2,7 @@
 extern crate num_derive;
 
 use clap::{Command, Arg, builder::PossibleValue, ArgAction};
+use std::time::{self, Instant};
 
 mod server;
 mod client;
@@ -9,7 +10,27 @@ mod tftp_protocol;
 mod tlog;
 
 
+//fn fill_resize_test(data: &mut Vec<u8>) {
+//    data.clear();
+//    data.reserve(1000000);
+//    for i in 0..1000000 {
+//        data.push(i as u8)
+//    }
+//}
+
 fn main()  {
+
+    //some test for ringbuffer Vector
+
+    //let start = Instant::now();
+    //let mut v = Vec::<u8>::new();
+    //for i in 0..8000 {
+    //    fill_resize_test(&mut v);
+    //}
+    //let diff = Instant::now().duration_since(start);
+    //println!("elapsed={}", diff.as_millis());
+    //return;
+
     let mut app = Command::new("tftpserver")
         .author("Martin.K, martin.awake1@gmail.com")
         .version("0.1.4")
